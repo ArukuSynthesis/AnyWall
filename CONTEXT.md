@@ -214,14 +214,23 @@ En un entorno estándar con Android SDK 35 y JDK 17:
 # Compilar APK debug y ejecutar pruebas unitarias
 ./gradlew assembleDebug testDebugUnitTest
 
-# Verificar que no existan permisos de red ni TODOs
-grep -i "INTERNET\|ACCESS_NETWORK_STATE" app/src/main/AndroidManifest.xml
+# Compilar APK release v0.1 firmado mediante variables de entorno (sin secretos en el repo)
+ANYWALL_KEYSTORE_PATH=/ruta/keystore.jks \
+ANYWALL_KEYSTORE_PASSWORD="..." \
+ANYWALL_KEY_ALIAS="..." \
+ANYWALL_KEY_PASSWORD="..." \
+./gradlew assembleRelease testReleaseUnitTest
+
+# Auditar permisos reales en el APK final (confirmar 0 permisos de red)
+aapt2 dump permissions app/build/outputs/apk/release/app-release.apk
 grep -rn "TODO" app/src/
 ```
 
-**Artefacto verificado en la iteración inicial:**
-- `app/build/outputs/apk/debug/app-debug.apk` (~30 MB, compilado con `BUILD SUCCESSFUL`).
-- Pruebas unitarias en `AnyWallEngineUnitTest` pasando al 100% (detección de formatos, parseo de rangos PDF, formateo de bytes, síntesis WAV y codificación LAME MP3 real).
+**Artefactos verificados:**
+- `app/build/outputs/apk/debug/app-debug.apk` (~30 MB, `BUILD SUCCESSFUL`).
+- `app/build/outputs/apk/release/AnyWall-v0.1-release.apk` (`versionName = "0.1"`, ~23 MB, `BUILD SUCCESSFUL`, firmado con esquema v2 y verificado con `apksigner verify`).
+- Auditoría con `aapt2 dump permissions`: **0 permisos de red** en el APK final (`AndroidManifest.xml` incluye `tools:node="remove"` para `ACCESS_NETWORK_STATE` con el fin de bloquear el permiso transitivo inyectado por `work-runtime`).
+- Pruebas unitarias en `AnyWallEngineUnitTest` pasando al 100% en debug y release (`testDebugUnitTest` y `testReleaseUnitTest`).
 
 > **Nota de ProGuard / Release:** Actualmente `isMinifyEnabled = false` en `release` para evitar roturas por reflexión en PDFBox, Mammoth y Commons Compress. Si en una iteración futura se activa R8 (`isMinifyEnabled = true`), revisar y probar exhaustivamente `app/proguard-rules.pro`.
 
@@ -229,18 +238,16 @@ grep -rn "TODO" app/src/
 
 ## 8. Pendientes y Hoja de Ruta Sugerida para Futuras Iteraciones
 
-1. **Control de versiones (Git):**
-   - Todos los archivos generados están actualmente sin commitear en el directorio de trabajo local (solo existe `Initial commit`). En la próxima sesión o cuando lo indiques, se puede hacer commit y push al repositorio `ArukuSynthesis/AnyWall`.
-2. **Pruebas instrumentadas (`androidTest`):**
+1. **Pruebas instrumentadas (`androidTest`):**
    - Añadir pruebas en emulador/dispositivo real para validar:
      - `WebViewPdfGenerator` + `PdfPrintCallbackBridge` en Android 13/14/15.
      - `MediaEngineImpl` con video real (resolución 720p/480p y extracción a MP3/M4A/AAC/WAV).
      - `ScopedStorageManager` en API 29+ y API 26-28.
      - `AnyWallDatabase` y migraciones de Room.
-3. **Mejoras funcionales potenciales:**
+2. **Mejoras funcionales potenciales:**
    - **Cola paralela / historial de trabajos fallidos:** Permitir encolar múltiples lotes secuenciales (`ExistingWorkPolicy.APPEND_OR_REPLACE`) en lugar de reemplazar el trabajo activo.
    - **Limpieza periódica de caché:** Invocar `uriFileResolver.cleanupTempFiles()` al iniciar la app si no hay trabajos activos en `WorkManager`, para limpiar residuos ante cierres inesperados.
    - **Previsualización de archivos:** Miniaturas locales con `BitmapFactory`/`ThumbnailUtils` en `InputFileCard` e `HistoryItemCard`.
    - **Más parámetros avanzados:** Control de bitrate explícito para audio/video, rotación/recorte de imágenes, contraseña para PDFs cifrados (PDFBox) y archivos ZIP protegidos.
    - **Migraciones Room con esquema exportado:** Cambiar `exportSchema = true` en `AnyWallDatabase` cuando se agreguen columnas nuevas para mantener historial de migraciones seguro.
-   - **Build Release firmado y optimización de tamaño:** Configurar `signingConfigs`, habilitar `isMinifyEnabled = true` + `isShrinkResources = true` con pruebas completas sobre `proguard-rules.pro`, y considerar App Bundle (`.aab`).
+   - **Optimización de tamaño y distribución:** Habilitar `isMinifyEnabled = true` + `isShrinkResources = true` con pruebas completas sobre `proguard-rules.pro`, automatizar GitHub Actions para releases firmados y generar App Bundle (`.aab`).

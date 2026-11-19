@@ -14,9 +14,21 @@ android {
         minSdk = 26
         targetSdk = 35
         versionCode = 1
-        versionName = "1.0.0"
+        versionName = "0.1"
         vectorDrawables {
             useSupportLibrary = true
+        }
+    }
+
+    signingConfigs {
+        create("release") {
+            val ksPath = System.getenv("ANYWALL_KEYSTORE_PATH")
+            if (!ksPath.isNullOrBlank() && file(ksPath).exists()) {
+                storeFile = file(ksPath)
+                storePassword = System.getenv("ANYWALL_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("ANYWALL_KEY_ALIAS")
+                keyPassword = System.getenv("ANYWALL_KEY_PASSWORD")
+            }
         }
     }
 
@@ -25,6 +37,10 @@ android {
             // La minificación se desactiva para preservar las clases que PDFBox, Mammoth y
             // Commons Compress cargan dinámicamente (recursos, fuentes y codecs).
             isMinifyEnabled = false
+            val ksPath = System.getenv("ANYWALL_KEYSTORE_PATH")
+            if (!ksPath.isNullOrBlank() && file(ksPath).exists()) {
+                signingConfig = signingConfigs.getByName("release")
+            }
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
