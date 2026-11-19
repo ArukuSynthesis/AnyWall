@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">AnyWall</string>
+    <string name="app_subtitle">Universal Converter</string>
+    <string name="offline_badge">100% Offline • Privado</string>
+    <string name="notification_channel_name">Conversiones de AnyWall</string>
+    <string name="notification_channel_desc">Progreso en segundo plano de conversiones multimedia y documentales locales</string>
+</resources>
