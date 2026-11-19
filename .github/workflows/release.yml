@@ -1,0 +1,159 @@
+name: Release AnyWall APK
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Etiqueta de versión (ej. v0.1)'
+        required: true
+        default: 'v0.1'
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    name: Compilar, Auditar y Publicar APK Release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout del repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Configurar Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Asegurar Android Build Tools 35.0.0
+        run: |
+          SDK_MANAGER="${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager"
+          if [ -x "$SDK_MANAGER" ]; then
+            yes | "$SDK_MANAGER" --licenses >/dev/null 2>&1 || true
+            "$SDK_MANAGER" "platforms;android-35" "build-tools;35.0.0"
+          fi
+
+      - name: Preparar keystore de firma release
+        env:
+          SECRET_KEYSTORE_B64: ${{ secrets.ANYWALL_KEYSTORE_BASE64 }}
+          SECRET_KEYSTORE_PASS: ${{ secrets.ANYWALL_KEYSTORE_PASSWORD }}
+          SECRET_KEY_ALIAS: ${{ secrets.ANYWALL_KEY_ALIAS }}
+          SECRET_KEY_PASS: ${{ secrets.ANYWALL_KEY_PASSWORD }}
+        run: |
+          KS_PATH="${RUNNER_TEMP}/anywall-release.jks"
+          if [ -n "$SECRET_KEYSTORE_B64" ]; then
+            echo "$SECRET_KEYSTORE_B64" | base64 --decode > "$KS_PATH"
+            echo "ANYWALL_KEYSTORE_PATH=$KS_PATH" >> "$GITHUB_ENV"
+            echo "ANYWALL_KEYSTORE_PASSWORD=$SECRET_KEYSTORE_PASS" >> "$GITHUB_ENV"
+            echo "ANYWALL_KEY_ALIAS=$SECRET_KEY_ALIAS" >> "$GITHUB_ENV"
+            echo "ANYWALL_KEY_PASSWORD=$SECRET_KEY_PASS" >> "$GITHUB_ENV"
+            echo "Usando keystore persistente configurado en GitHub Secrets."
+          else
+            GEN_PASS="AnyWallReleaseCI2026!"
+            keytool -genkeypair -v \
+              -keystore "$KS_PATH" \
+              -storetype PKCS12 \
+              -alias anywall_release \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -storepass "$GEN_PASS" \
+              -keypass "$GEN_PASS" \
+              -dname "CN=AnyWall Universal Converter, OU=SynthesizerEnd, O=AnyWall, L=Local, S=Offline, C=ES"
+            echo "ANYWALL_KEYSTORE_PATH=$KS_PATH" >> "$GITHUB_ENV"
+            echo "ANYWALL_KEYSTORE_PASSWORD=$GEN_PASS" >> "$GITHUB_ENV"
+            echo "ANYWALL_KEY_ALIAS=anywall_release" >> "$GITHUB_ENV"
+            echo "ANYWALL_KEY_PASSWORD=$GEN_PASS" >> "$GITHUB_ENV"
+            echo "Usando keystore de release generado automáticamente para esta compilación."
+          fi
+
+      - name: Compilar APK release y ejecutar pruebas unitarias
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease testReleaseUnitTest --no-daemon --stacktrace
+
+      - name: Auditar permisos 100% offline y verificar firma del APK
+        id: audit
+        run: |
+          TAG_NAME="${{ github.ref_type == 'tag' && github.ref_name || inputs.tag }}"
+          APK_SRC="app/build/outputs/apk/release/app-release.apk"
+          OUT_DIR="${RUNNER_TEMP}/release_assets"
+          mkdir -p "$OUT_DIR"
+          APK_DST="${OUT_DIR}/AnyWall-${TAG_NAME}-release.apk"
+          cp "$APK_SRC" "$APK_DST"
+
+          BUILD_TOOLS="${ANDROID_HOME}/build-tools/35.0.0"
+          if [ ! -d "$BUILD_TOOLS" ]; then
+            BUILD_TOOLS="$(ls -d "${ANDROID_HOME}"/build-tools/* | sort -V | tail -n 1)"
+          fi
+
+          echo "=== Verificando firma con apksigner ==="
+          "${BUILD_TOOLS}/apksigner" verify --verbose "$APK_DST"
+
+          echo "=== Auditando permisos del APK final ==="
+          PERMS="$("${BUILD_TOOLS}/aapt2" dump permissions "$APK_DST")"
+          echo "$PERMS"
+
+          if echo "$PERMS" | grep -qE "android\.permission\.(INTERNET|ACCESS_NETWORK_STATE)"; then
+            echo "::error::Se detectó un permiso de red prohibido en el APK final!"
+            exit 1
+          fi
+
+          (cd "$OUT_DIR" && sha256sum "AnyWall-${TAG_NAME}-release.apk" > SHA256SUMS.txt)
+          SHA256="$(awk '{print $1}' "${OUT_DIR}/SHA256SUMS.txt")"
+          SIZE_HR="$(du -h "$APK_DST" | awk '{print $1}')"
+
+          echo "tag=${TAG_NAME}" >> "$GITHUB_OUTPUT"
+          echo "apk_path=${APK_DST}" >> "$GITHUB_OUTPUT"
+          echo "sums_path=${OUT_DIR}/SHA256SUMS.txt" >> "$GITHUB_OUTPUT"
+          echo "apk_name=AnyWall-${TAG_NAME}-release.apk" >> "$GITHUB_OUTPUT"
+          echo "sha256=${SHA256}" >> "$GITHUB_OUTPUT"
+          echo "size_hr=${SIZE_HR}" >> "$GITHUB_OUTPUT"
+
+      - name: Publicar GitHub Release con el APK adjunto
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.audit.outputs.tag }}"
+          APK_PATH="${{ steps.audit.outputs.apk_path }}"
+          SUMS_PATH="${{ steps.audit.outputs.sums_path }}"
+          APK_NAME="${{ steps.audit.outputs.apk_name }}"
+          SHA256="${{ steps.audit.outputs.sha256 }}"
+          SIZE_HR="${{ steps.audit.outputs.size_hr }}"
+
+          cat > "${RUNNER_TEMP}/release_notes.md" <<EOF
+          ## AnyWall: Universal Converter ${TAG}
+
+          Versión release compilada, firmada y auditada automáticamente de **AnyWall: Universal Converter** (\`com.anywall.converter\`), conversor universal **100% offline** para Android.
+
+          ### Características incluidas
+          - **Estrictamente 100% Offline:** 0 permisos de red en el APK final (sin \`INTERNET\` ni \`ACCESS_NETWORK_STATE\`, auditado automáticamente en CI con \`aapt2 dump permissions\`).
+          - **Imágenes y PDF básico:** Conversión bidireccional \`JPG\`, \`PNG\`, \`WEBP\`, \`BMP\` (codificador nativo 24-bit), renderizado \`SVG\`, imágenes a \`PDF\` único y extracción de páginas PDF a imágenes.
+          - **Documentos y PDF avanzado:** Unión de múltiples PDFs, división/extracción por rangos, compresión/optimización y conversión local de \`DOCX\`, \`HTML\`, \`TXT\` y \`MD\` a \`PDF\` mediante Mammoth + WebView offscreen.
+          - **Audio y Video offline:** Conversión de video (\`MP4\`, \`MKV\`, \`MOV\`, \`WEBM\`) con selector de resolución (\`Original\`, \`1080p\`, \`720p\`, \`480p\`) y extracción/conversión de audio (\`MP3\`, \`AAC\`, \`M4A\`, \`WAV\`) con Media3 Transformer y codificador LAME puro.
+          - **Archivos comprimidos:** Empaquetado en \`ZIP\`, \`TAR\`, \`TAR.GZ\` y extracción de \`ZIP\`, \`TAR\`, \`TAR.GZ\`, \`GZ\` y \`7Z\`.
+          - **Integración nativa:** Android Share Sheet (\`ACTION_SEND\` / \`ACTION_SEND_MULTIPLE\`), procesamiento en segundo plano con WorkManager y notificación de progreso real, guardado en \`Downloads/AnyWall/\` e historial persistente en Room.
+
+          ### Descarga e integridad
+          - **Archivo:** \`${APK_NAME}\` (${SIZE_HR}, firmado con APK Signature Scheme v2)
+          - **Android mínimo:** Android 8.0 (API 26) • **Target SDK:** Android 15 (API 35)
+          - **SHA-256:** \`${SHA256}\`
+          EOF
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$APK_PATH" "$SUMS_PATH" --clobber
+            gh release edit "$TAG" \
+              --title "AnyWall: Universal Converter ${TAG}" \
+              --notes-file "${RUNNER_TEMP}/release_notes.md"
+          else
+            gh release create "$TAG" "$APK_PATH" "$SUMS_PATH" \
+              --title "AnyWall: Universal Converter ${TAG}" \
+              --notes-file "${RUNNER_TEMP}/release_notes.md"
+          fi
