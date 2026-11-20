@@ -17,6 +17,8 @@ import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import com.anywall.converter.domain.model.PdfPageOrientation
+import com.anywall.converter.domain.model.PdfPageSize
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
@@ -34,6 +36,7 @@ import kotlin.math.max
 /**
  * Renderizador 100% local de HTML a PDF usando un `WebView` offscreen en el hilo principal
  * acoplado a un `PrintDocumentAdapter` personalizado que escribe directamente al archivo destino.
+ * Soporta tamaño de página (`A4` / `Carta`) y orientación (`Vertical` / `Horizontal`).
  */
 class WebViewPdfGenerator(private val context: Context) {
 
@@ -44,10 +47,6 @@ class WebViewPdfGenerator(private val context: Context) {
         }
     }
 
-    /**
-     * Adaptador `PrintDocumentAdapter` personalizado que envuelve el adaptador nativo del
-     * `WebView` offscreen y gestiona el ciclo de vida de impresión hacia archivo local.
-     */
     private class OffscreenWebViewPrintAdapter(
         private val delegate: PrintDocumentAdapter,
         private val onFinishedCallback: () -> Unit
@@ -86,12 +85,14 @@ class WebViewPdfGenerator(private val context: Context) {
     }
 
     /**
-     * Renderiza una cadena HTML completa a un archivo PDF en `outputFile`.
+     * Renderiza una cadena HTML completa a un archivo PDF en `outputFile` respetando tamaño y orientación.
      */
     suspend fun renderHtmlToPdfFile(
         htmlContent: String,
         documentTitle: String,
-        outputFile: File
+        outputFile: File,
+        pageSize: PdfPageSize = PdfPageSize.A4,
+        pageOrientation: PdfPageOrientation = PdfPageOrientation.PORTRAIT
     ): File = withTimeout(90_000L) {
         withContext(Dispatchers.Main) {
             suspendCancellableCoroutine { continuation ->
@@ -113,14 +114,13 @@ class WebViewPdfGenerator(private val context: Context) {
                     cleanupWebView()
                 }
 
-                // Configuración estrictamente offline del WebView
                 webView.settings.apply {
                     javaScriptEnabled = false
                     allowFileAccess = false
                     allowContentAccess = false
                     blockNetworkLoads = true
                     blockNetworkImage = true
-                    loadsImagesAutomatically = true // Permite imágenes inline data:image/... de DOCX
+                    loadsImagesAutomatically = true
                     cacheMode = WebSettings.LOAD_NO_CACHE
                     defaultTextEncodingName = "UTF-8"
                     useWideViewPort = true
@@ -130,9 +130,12 @@ class WebViewPdfGenerator(private val context: Context) {
                     }
                 }
 
-                // Dimensionar el WebView offscreen en proporción A4 (595 x 842 pt a 2x = 1190 x 1684 px)
-                val pageWidthPx = 1190
-                val pageHeightPx = 1684
+                val isLandscape = (pageOrientation == PdfPageOrientation.LANDSCAPE)
+                val basePtW = if (isLandscape) pageSize.heightPt else pageSize.widthPt
+                val basePtH = if (isLandscape) pageSize.widthPt else pageSize.heightPt
+                val pageWidthPx = basePtW * 2
+                val pageHeightPx = basePtH * 2
+
                 webView.measure(
                     View.MeasureSpec.makeMeasureSpec(pageWidthPx, View.MeasureSpec.EXACTLY),
                     View.MeasureSpec.makeMeasureSpec(pageHeightPx, View.MeasureSpec.EXACTLY)
@@ -145,7 +148,6 @@ class WebViewPdfGenerator(private val context: Context) {
                         request: WebResourceRequest?
                     ): WebResourceResponse? {
                         val scheme = request?.url?.scheme?.lowercase().orEmpty()
-                        // Bloquear cualquier intento de carga externa http/https en un HTML de usuario
                         if (scheme == "http" || scheme == "https") {
                             return WebResourceResponse(
                                 "text/plain",
@@ -159,12 +161,21 @@ class WebViewPdfGenerator(private val context: Context) {
                     override fun onPageFinished(view: WebView, url: String?) {
                         if (completed.get()) return
 
-                        // Dar un ciclo de mensaje en el hilo principal para asegurar que el DOM y layout estén listos
                         view.postDelayed({
                             if (completed.get() || !continuation.isActive) return@postDelayed
 
+                            val baseMediaSize = when (pageSize) {
+                                PdfPageSize.A4 -> PrintAttributes.MediaSize.ISO_A4
+                                PdfPageSize.LETTER -> PrintAttributes.MediaSize.NA_LETTER
+                            }
+                            val orientedMediaSize = if (isLandscape) {
+                                baseMediaSize.asLandscape()
+                            } else {
+                                baseMediaSize.asPortrait()
+                            }
+
                             val attributes = PrintAttributes.Builder()
-                                .setMediaSize(PrintAttributes.MediaSize.ISO_A4)
+                                .setMediaSize(orientedMediaSize)
                                 .setResolution(PrintAttributes.Resolution("pdf", "pdf", 300, 300))
                                 .setMinMargins(PrintAttributes.Margins.NO_MARGINS)
                                 .build()
@@ -172,9 +183,7 @@ class WebViewPdfGenerator(private val context: Context) {
                             val baseAdapter = view.createPrintDocumentAdapter(
                                 documentTitle.ifBlank { "AnyWall_Document" }
                             )
-                            val customAdapter = OffscreenWebViewPrintAdapter(baseAdapter) {
-                                // Limpieza diferida al terminar la impresión
-                            }
+                            val customAdapter = OffscreenWebViewPrintAdapter(baseAdapter) {}
 
                             PdfPrintCallbackBridge.printToFile(
                                 adapter = customAdapter,
@@ -187,9 +196,13 @@ class WebViewPdfGenerator(private val context: Context) {
                                         continuation.resume(outputFile)
                                     }
                                 } else {
-                                    // Fallback seguro: dibujar el WebView offscreen paginado directamente en PdfDocument
                                     try {
-                                        renderWebViewCanvasFallback(view, outputFile)
+                                        renderWebViewCanvasFallback(
+                                            webView = view,
+                                            outputFile = outputFile,
+                                            pageWidthPt = basePtW,
+                                            pageHeightPt = basePtH
+                                        )
                                         if (completed.compareAndSet(false, true)) {
                                             cleanupWebView()
                                             continuation.resume(outputFile)
@@ -220,30 +233,29 @@ class WebViewPdfGenerator(private val context: Context) {
         }
     }
 
-    /**
-     * Fallback 100% local que pagina el contenido del `WebView` offscreen sobre un `PdfDocument`
-     * nativo en caso de que el subsistema `PrintDocumentAdapter` de una ROM específica falle.
-     */
-    private fun renderWebViewCanvasFallback(webView: WebView, outputFile: File) {
-        val pageWidth = 595
-        val pageHeight = 842
+    private fun renderWebViewCanvasFallback(
+        webView: WebView,
+        outputFile: File,
+        pageWidthPt: Int,
+        pageHeightPt: Int
+    ) {
         webView.measure(
-            View.MeasureSpec.makeMeasureSpec(pageWidth, View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(pageWidthPt, View.MeasureSpec.EXACTLY),
             View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED)
         )
-        val totalContentHeight = max(webView.measuredHeight, pageHeight)
-        webView.layout(0, 0, pageWidth, totalContentHeight)
+        val totalContentHeight = max(webView.measuredHeight, pageHeightPt)
+        webView.layout(0, 0, pageWidthPt, totalContentHeight)
 
-        val totalPages = ceil(totalContentHeight.toDouble() / pageHeight.toDouble()).toInt().coerceIn(1, 500)
+        val totalPages = ceil(totalContentHeight.toDouble() / pageHeightPt.toDouble()).toInt().coerceIn(1, 500)
         val pdfDocument = PdfDocument()
         try {
             for (pageIndex in 0 until totalPages) {
-                val pageInfo = PdfDocument.PageInfo.Builder(pageWidth, pageHeight, pageIndex + 1).create()
+                val pageInfo = PdfDocument.PageInfo.Builder(pageWidthPt, pageHeightPt, pageIndex + 1).create()
                 val page = pdfDocument.startPage(pageInfo)
                 val canvas: Canvas = page.canvas
                 canvas.drawColor(Color.WHITE)
                 canvas.save()
-                canvas.translate(0f, -(pageIndex * pageHeight).toFloat())
+                canvas.translate(0f, -(pageIndex * pageHeightPt).toFloat())
                 webView.draw(canvas)
                 canvas.restore()
                 pdfDocument.finishPage(page)

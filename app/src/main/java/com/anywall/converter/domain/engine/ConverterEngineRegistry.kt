@@ -9,6 +9,7 @@ import com.anywall.converter.domain.model.SupportedFormat
 /**
  * Coordinador central que enruta las solicitudes de conversión al motor apropiado
  * (`ImageEngineImpl`, `DocumentEngineImpl`, `MediaEngineImpl` o `ArchiveEngineImpl`).
+ * En v0.2 soporta además lotes mixtos de Imágenes + Documentos/PDF hacia un único PDF continuo.
  */
 class ConverterEngineRegistry(
     val imageEngine: FileConverterEngine,
@@ -31,6 +32,16 @@ class ConverterEngineRegistry(
         val distinctSources = sourceFormats.distinct()
         val result = linkedSetOf<SupportedFormat>()
 
+        // Si el lote mezcla Imágenes y Documentos/PDF, permitir unirlos o convertirlos a PDF
+        val allImagesOrDocs = distinctSources.all {
+            it.category == FormatCategory.IMAGE || it.category == FormatCategory.DOCUMENT
+        }
+        val hasBothImageAndDoc = distinctSources.any { it.category == FormatCategory.IMAGE } &&
+            distinctSources.any { it.category == FormatCategory.DOCUMENT }
+        if (allImagesOrDocs && hasBothImageAndDoc) {
+            result.add(SupportedFormat.PDF)
+        }
+
         for (engine in engines) {
             result.addAll(engine.getSupportedTargetFormats(distinctSources))
         }
@@ -45,7 +56,7 @@ class ConverterEngineRegistry(
         sourceFormats: List<SupportedFormat>,
         targetFormat: SupportedFormat
     ): FileConverterEngine {
-        // 1. Si el destino es empaquetado (ZIP, TAR, TAR.GZ) o extracción de comprimidos -> ArchiveEngine
+        // 1. Si el destino es empaquetado (ZIP, TAR, TAR.GZ, TAR.XZ, TAR.BZ2) o extracción -> ArchiveEngine
         if (targetFormat.isArchiveOutput || targetFormat.isExtractionTarget) {
             return archiveEngine
         }
@@ -63,10 +74,10 @@ class ConverterEngineRegistry(
             return imageEngine
         }
 
-        // 4. Si los orígenes son documentos/PDF y el destino es PDF, TXT o HTML -> DocumentEngine
-        val allDocsOrPdf = sourceFormats.isNotEmpty() &&
-            sourceFormats.all { it.category == FormatCategory.DOCUMENT }
-        if (allDocsOrPdf && targetFormat.category == FormatCategory.DOCUMENT) {
+        // 4. Si los orígenes son documentos/PDF (o lote mixto de imágenes + documentos) y el destino es documental -> DocumentEngine
+        val allDocsOrImages = sourceFormats.isNotEmpty() &&
+            sourceFormats.all { it.category == FormatCategory.DOCUMENT || it.category == FormatCategory.IMAGE }
+        if (allDocsOrImages && targetFormat.category == FormatCategory.DOCUMENT) {
             return documentEngine
         }
 
@@ -77,7 +88,6 @@ class ConverterEngineRegistry(
             return mediaEngine
         }
 
-        // Fallback: buscar el primer motor que soporte el formato destino para esos orígenes
         return engines.firstOrNull { engine ->
             targetFormat in engine.getSupportedTargetFormats(sourceFormats)
         } ?: engines.firstOrNull { engine ->

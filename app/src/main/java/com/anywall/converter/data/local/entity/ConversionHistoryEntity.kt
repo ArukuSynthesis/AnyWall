@@ -9,7 +9,7 @@ import com.anywall.converter.domain.model.HistoryRecord
 import com.anywall.converter.domain.model.SupportedFormat
 
 /**
- * Entidad Room para registrar cada archivo convertido en la base de datos local.
+ * Entidad Room para registrar cada archivo convertido en la base de datos local (v0.2 - Esquema v2).
  */
 @Entity(tableName = "conversion_history")
 data class ConversionHistoryEntity(
@@ -21,6 +21,9 @@ data class ConversionHistoryEntity(
 
     @ColumnInfo(name = "source_format")
     val sourceFormatName: String,
+
+    @ColumnInfo(name = "source_size_bytes", defaultValue = "0")
+    val sourceSizeBytes: Long = 0L,
 
     @ColumnInfo(name = "output_display_name")
     val outputDisplayName: String,
@@ -57,6 +60,7 @@ data class ConversionHistoryEntity(
             id = id,
             sourceDisplayName = sourceDisplayName,
             sourceFormat = srcFmt,
+            sourceSizeBytes = sourceSizeBytes,
             outputDisplayName = outputDisplayName,
             outputFormat = outFmt,
             category = cat,
@@ -73,6 +77,7 @@ data class ConversionHistoryEntity(
             return ConversionHistoryEntity(
                 sourceDisplayName = result.sourceDisplayName,
                 sourceFormatName = result.sourceFormat.name,
+                sourceSizeBytes = result.sourceSizeBytes,
                 outputDisplayName = result.outputDisplayName,
                 outputFormatName = result.outputFormat.name,
                 categoryName = result.outputCategory.name,

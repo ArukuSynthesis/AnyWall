@@ -14,15 +14,23 @@ import com.anywall.converter.domain.repository.ConversionHistoryRepository
 import com.anywall.converter.workers.ConversionWorkScheduler
 
 /**
- * Contenedor de Inyección de Dependencias manual limpia para AnyWall: Universal Converter.
+ * Contenedor de Inyección de Dependencias manual limpia para AnyWall: Universal Converter (v0.2).
  * Inicializado en `AnyWallApplication` sin necesidad de Hilt/Dagger.
  */
 class AppContainer(context: Context) {
 
     private val appContext: Context = context.applicationContext
 
+    val appPreferences: AppPreferences by lazy {
+        AppPreferences(appContext)
+    }
+
     val uriFileResolver: UriFileResolver by lazy {
         UriFileResolver(appContext)
+    }
+
+    val thumbnailLoader: LocalThumbnailLoader by lazy {
+        LocalThumbnailLoader(appContext, uriFileResolver)
     }
 
     val scopedStorageManager: ScopedStorageManager by lazy {

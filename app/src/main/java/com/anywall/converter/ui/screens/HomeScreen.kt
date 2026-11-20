@@ -24,8 +24,12 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.AddCircleOutline
 import androidx.compose.material.icons.filled.Bolt
+import androidx.compose.material.icons.filled.Code
+import androidx.compose.material.icons.filled.CreateNewFolder
 import androidx.compose.material.icons.filled.FileOpen
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -36,6 +40,7 @@ import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -43,6 +48,10 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -50,28 +59,43 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.anywall.converter.core.AppThemeMode
 import com.anywall.converter.core.FileShareHelper
+import com.anywall.converter.core.LocalThumbnailLoader
 import com.anywall.converter.domain.model.FormatCategory
 import com.anywall.converter.domain.model.HistoryRecord
+import com.anywall.converter.ui.components.AboutCreditsDialog
+import com.anywall.converter.ui.components.AnyWallCreditsCatalog
 import com.anywall.converter.ui.components.CategoryQuickCard
 import com.anywall.converter.ui.components.ConversionProgressCard
 import com.anywall.converter.ui.components.HistoryItemCard
 import com.anywall.converter.ui.components.OfflinePrivacyBadge
+import com.anywall.converter.ui.components.SettingsDialog
 
 /**
- * `HomeScreen`:
- * - Encabezado con el nombre **AnyWall** y la insignia visual `"100% Offline • Privado"`.
- * - Botón principal destacado para seleccionar uno o múltiples archivos (`ActivityResultContracts.OpenMultipleDocuments`).
- * - Tarjetas de acceso rápido por categoría (`Imágenes`, `Documentos / PDF`, `Audio / Video`, `Comprimidos`)
- *   que abren el selector filtrado por tipo MIME.
- * - Acceso directo al Historial de archivos convertidos.
+ * `HomeScreen` (v0.2):
+ * - Encabezado con el nombre **AnyWall** (`Universal Converter v0.2 • SynthesizerEnd`) y la insignia `"100% Offline • Privado"`.
+ * - Botón principal para seleccionar uno o múltiples archivos (`OpenMultipleDocuments`) y botón secundario para importar una carpeta completa (`OpenDocumentTree`).
+ * - Tarjetas de acceso rápido por categoría (`Imágenes`, `Documentos / PDF`, `Audio / Video`, `Comprimidos`).
+ * - Acceso directo al Historial de archivos convertidos, Ajustes locales y Créditos/Licencias Open Source.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(
     configureState: ConfigureUiState,
     recentHistory: List<HistoryRecord>,
+    thumbnailLoader: LocalThumbnailLoader?,
+    themeMode: AppThemeMode,
+    autoCleanTempCache: Boolean,
+    defaultStripExif: Boolean,
+    tempCacheSizeBytes: Long,
+    onSelectThemeMode: (AppThemeMode) -> Unit,
+    onToggleAutoCleanCache: (Boolean) -> Unit,
+    onToggleDefaultStripExif: (Boolean) -> Unit,
+    onRefreshTempCacheSize: () -> Unit,
+    onClearTempCacheNow: () -> Unit,
     onFilesSelected: (List<Uri>) -> Unit,
+    onFolderSelected: (Uri) -> Unit,
     onOpenConfigure: () -> Unit,
     onOpenHistory: () -> Unit,
     onCancelActiveJob: () -> Unit,
@@ -79,14 +103,47 @@ fun HomeScreen(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    var showSettingsDialog by remember { mutableStateOf(false) }
+    var showCreditsDialog by remember { mutableStateOf(false) }
 
-    // Selector universal para uno o múltiples archivos
     val multiDocumentLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenMultipleDocuments()
     ) { uris ->
         if (uris.isNotEmpty()) {
             onFilesSelected(uris)
         }
+    }
+
+    val folderTreeLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocumentTree()
+    ) { treeUri ->
+        if (treeUri != null) {
+            onFolderSelected(treeUri)
+        }
+    }
+
+    if (showSettingsDialog) {
+        SettingsDialog(
+            currentThemeMode = themeMode,
+            autoCleanTempCache = autoCleanTempCache,
+            defaultStripExif = defaultStripExif,
+            tempCacheSizeBytes = tempCacheSizeBytes,
+            onSelectThemeMode = onSelectThemeMode,
+            onToggleAutoCleanCache = onToggleAutoCleanCache,
+            onToggleDefaultStripExif = onToggleDefaultStripExif,
+            onClearTempCacheNow = onClearTempCacheNow,
+            onOpenCredits = {
+                showSettingsDialog = false
+                showCreditsDialog = true
+            },
+            onDismiss = { showSettingsDialog = false }
+        )
+    }
+
+    if (showCreditsDialog) {
+        AboutCreditsDialog(
+            onDismiss = { showCreditsDialog = false }
+        )
     }
 
     Scaffold(
@@ -119,7 +176,7 @@ fun HomeScreen(
                                 fontWeight = FontWeight.ExtraBold
                             )
                             Text(
-                                text = "Universal Converter",
+                                text = "Universal Converter v0.2 • ${AnyWallCreditsCatalog.DEVELOPER_NAME}",
                                 style = MaterialTheme.typography.labelMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -131,6 +188,23 @@ fun HomeScreen(
                         Icon(
                             imageVector = Icons.Default.History,
                             contentDescription = "Abrir Historial de Conversiones"
+                        )
+                    }
+                    IconButton(onClick = { showCreditsDialog = true }) {
+                        Icon(
+                            imageVector = Icons.Default.Info,
+                            contentDescription = "Acerca de AnyWall y Créditos Open Source"
+                        )
+                    }
+                    IconButton(
+                        onClick = {
+                            onRefreshTempCacheSize()
+                            showSettingsDialog = true
+                        }
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Settings,
+                            contentDescription = "Ajustes Locales"
                         )
                     }
                 },
@@ -147,7 +221,6 @@ fun HomeScreen(
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(18.dp)
         ) {
-            // Encabezado Principal Hero con insignia "100% Offline • Privado" y botón destacado
             item {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
@@ -183,7 +256,7 @@ fun HomeScreen(
                         Spacer(modifier = Modifier.height(6.dp))
 
                         Text(
-                            text = "Convierte imágenes, documentos Office/PDF, video, audio y archivos comprimidos sin conexión a Internet y sin subir tus datos a la nube.",
+                            text = "Convierte múltiples archivos o carpetas enteras, edita páginas de PDF en vista previa, procesa imágenes, video, audio y comprimidos 100% sin conexión a Internet.",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -207,8 +280,32 @@ fun HomeScreen(
                             )
                             Spacer(modifier = Modifier.width(10.dp))
                             Text(
-                                text = "Seleccionar Archivos para Convertir",
+                                text = "Seleccionar Uno o Múltiples Archivos",
                                 style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        FilledTonalButton(
+                            onClick = {
+                                folderTreeLauncher.launch(null)
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(46.dp),
+                            shape = RoundedCornerShape(14.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.CreateNewFolder,
+                                contentDescription = null,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "Importar Carpeta Completa al Lote",
+                                style = MaterialTheme.typography.labelLarge,
                                 fontWeight = FontWeight.Bold
                             )
                         }
@@ -216,7 +313,6 @@ fun HomeScreen(
                 }
             }
 
-            // Tarjeta de progreso si hay una conversión activa o recién terminada
             if (configureState.activeJob.isRunning ||
                 configureState.activeJob.isCompleted ||
                 configureState.activeJob.isFailed
@@ -230,7 +326,6 @@ fun HomeScreen(
                 }
             }
 
-            // Acceso rápido al lote cargado actualmente si existen archivos en cola
             if (configureState.inputFiles.isNotEmpty()) {
                 item {
                     OutlinedCard(
@@ -279,7 +374,6 @@ fun HomeScreen(
                 }
             }
 
-            // Tarjetas de acceso rápido por categoría filtradas por tipo MIME
             item {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text(
@@ -330,7 +424,6 @@ fun HomeScreen(
                 }
             }
 
-            // Acceso directo al Historial de archivos convertidos
             item {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -407,10 +500,51 @@ fun HomeScreen(
                 ) { record ->
                     HistoryItemCard(
                         record = record,
+                        thumbnailLoader = thumbnailLoader,
                         onOpen = { FileShareHelper.openConvertedFile(context, record) },
                         onShare = { FileShareHelper.shareConvertedFile(context, record) },
                         onDelete = { onDeleteHistoryRecord(record) }
                     )
+                }
+            }
+
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(18.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
+                    )
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Text(
+                            text = "Desarrollado por ${AnyWallCreditsCatalog.DEVELOPER_NAME}",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = "AnyWall: Universal Converter v0.2 • Licencia AGPL-3.0",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.height(2.dp))
+                        OutlinedButton(onClick = { showCreditsDialog = true }) {
+                            Icon(
+                                imageVector = Icons.Default.Code,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Créditos y Licencias de Código Abierto")
+                        }
+                    }
                 }
             }
         }

@@ -54,6 +54,19 @@ class ConversionHistoryRepositoryImpl(
         dao.deleteById(record.id) > 0
     }
 
+    override suspend fun deleteRecords(
+        records: List<HistoryRecord>,
+        deletePhysicalFiles: Boolean
+    ): Int = withContext(Dispatchers.IO) {
+        if (records.isEmpty()) return@withContext 0
+        if (deletePhysicalFiles) {
+            for (record in records) {
+                storageManager.deleteSavedOutput(record.outputUriString, record.outputAbsolutePath)
+            }
+        }
+        dao.deleteByIds(records.map { it.id })
+    }
+
     override suspend fun clearAll(deletePhysicalFiles: Boolean) = withContext(Dispatchers.IO) {
         if (deletePhysicalFiles) {
             val all = dao.getAllSnapshot()

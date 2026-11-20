@@ -1,7 +1,7 @@
 package com.anywall.converter.domain.model
 
 /**
- * Categorías principales de archivos soportadas por AnyWall: Universal Converter.
+ * Categorías principales de archivos soportadas por AnyWall: Universal Converter (v0.2).
  */
 enum class FormatCategory(
     val displayNameEs: String,
@@ -10,12 +10,12 @@ enum class FormatCategory(
 ) {
     IMAGE(
         displayNameEs = "Imágenes",
-        descriptionEs = "JPG, PNG, WEBP, BMP, SVG ↔ PDF",
+        descriptionEs = "JPG, PNG, WEBP, BMP, SVG, HEIC, GIF ↔ PDF",
         mimeFilters = arrayOf("image/*", "application/pdf")
     ),
     DOCUMENT(
         displayNameEs = "Documentos / PDF",
-        descriptionEs = "PDF, DOCX, HTML, TXT, Markdown",
+        descriptionEs = "PDF (Unir/Cifrar/Dividir), DOCX, HTML, TXT, MD",
         mimeFilters = arrayOf(
             "application/pdf",
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -32,13 +32,15 @@ enum class FormatCategory(
     ),
     ARCHIVE(
         displayNameEs = "Comprimidos",
-        descriptionEs = "ZIP, TAR, TAR.GZ, GZ, 7Z",
+        descriptionEs = "ZIP, TAR, TAR.GZ, TAR.XZ, TAR.BZ2, GZ, XZ, BZ2, 7Z",
         mimeFilters = arrayOf(
             "application/zip",
             "application/x-tar",
             "application/gzip",
             "application/x-gzip",
             "application/x-gtar",
+            "application/x-xz",
+            "application/x-bzip2",
             "application/x-7z-compressed",
             "application/octet-stream",
             "*/*"

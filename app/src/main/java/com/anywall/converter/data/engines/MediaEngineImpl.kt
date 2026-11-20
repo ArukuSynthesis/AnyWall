@@ -43,13 +43,13 @@ import java.nio.ByteBuffer
 import kotlin.coroutines.coroutineContext
 
 /**
- * Motor 3: `MediaEngineImpl` (Video y Audio Offline)
+ * Motor 3: `MediaEngineImpl` (Video y Audio Offline - v0.2)
  * - Conversión de video (`MP4`, `MKV`, `MOV`, `WEBM`) con selector de resolución
- *   (`Original`, `1080p`, `720p`, `480p`) aplicando `Presentation.createForHeight(...)` en `Media3 Transformer`.
+ *   (`Original`, `1080p`, `720p`, `480p`) aplicando `Presentation.createForHeight(...)`,
+ *   opción de silenciar video (`setRemoveAudio(true)`) y recorte de inicio/fin (`ClippingConfiguration`).
  * - Extracción y conversión de audio (`MP3`, `AAC`, `M4A`, `WAV`) configurando
- *   `EditedMediaItem.Builder(mediaItem).setRemoveVideo(true).build()`.
- * - Polling en vivo del progreso con `Transformer.getProgress(progressHolder)` para reportar
- *   avance continuo (`0.0` a `1.0`) al `BatchConversionWorker`.
+ *   `EditedMediaItem.Builder(mediaItem).setRemoveVideo(true).build()` y recorte opcional.
+ * - Polling en vivo del progreso con `Transformer.getProgress(progressHolder)`.
  */
 @OptIn(UnstableApi::class)
 class MediaEngineImpl(
@@ -88,7 +88,6 @@ class MediaEngineImpl(
 
         val allSourcesAreVideo = distinct.all { it in videoFormats }
         return if (allSourcesAreVideo) {
-            // Si el origen es video, permite convertir a cualquier formato de video o extraer audio
             listOf(
                 SupportedFormat.MP4,
                 SupportedFormat.MKV,
@@ -100,7 +99,6 @@ class MediaEngineImpl(
                 SupportedFormat.WAV
             )
         } else {
-            // Si hay archivos de solo audio, permite convertir/extraer a todos los formatos de audio
             listOf(
                 SupportedFormat.MP3,
                 SupportedFormat.AAC,
@@ -148,10 +146,21 @@ class MediaEngineImpl(
         results
     }
 
-    /**
-     * Conversión de video (`MP4`, `MKV`, `MOV`, `WEBM`) con `Media3 Transformer`
-     * aplicando `Presentation.createForHeight(...)` cuando se selecciona `1080p`, `720p` o `480p`.
-     */
+    private fun buildMediaItemWithOptionalTrim(tempInput: File, options: ConversionOptions): MediaItem {
+        val builder = MediaItem.Builder().setUri(android.net.Uri.fromFile(tempInput))
+        if (options.hasValidTrimRange) {
+            val startMs = (options.trimStartSeconds ?: 0L).coerceAtLeast(0L) * 1000L
+            val endSec = options.trimEndSeconds
+            val clipBuilder = MediaItem.ClippingConfiguration.Builder()
+                .setStartPositionMs(startMs)
+            if (endSec != null && endSec * 1000L > startMs) {
+                clipBuilder.setEndPositionMs(endSec * 1000L)
+            }
+            builder.setClippingConfiguration(clipBuilder.build())
+        }
+        return builder.build()
+    }
+
     private suspend fun convertVideoFile(
         item: InputFileItem,
         index: Int,
@@ -171,7 +180,7 @@ class MediaEngineImpl(
         )
 
         try {
-            val mediaItem = MediaItem.fromUri(android.net.Uri.fromFile(tempInput))
+            val mediaItem = buildMediaItemWithOptionalTrim(tempInput, options)
             val videoEffects = mutableListOf<Effect>()
             val targetHeight = options.videoResolution.targetHeightPx
             if (targetHeight != null && targetHeight > 0) {
@@ -179,19 +188,19 @@ class MediaEngineImpl(
             }
 
             val editedMediaItem = EditedMediaItem.Builder(mediaItem)
+                .setRemoveAudio(options.muteVideoAudio)
                 .setEffects(Effects(emptyList<AudioProcessor>(), videoEffects))
                 .build()
 
             val useWebmContainer = (targetFormat == SupportedFormat.WEBM || targetFormat == SupportedFormat.MKV)
 
             val transformSuccess = if (useWebmContainer) {
-                // Intentar primero con codificación VP8/VP9 + Opus sobre MediaMuxer MUXER_OUTPUT_WEBM
                 try {
                     runMedia3TransformerWithPolling(
                         editedMediaItem = editedMediaItem,
                         outputFile = tempOutput,
                         videoMimeType = MimeTypes.VIDEO_VP8,
-                        audioMimeType = MimeTypes.AUDIO_OPUS,
+                        audioMimeType = if (options.muteVideoAudio) null else MimeTypes.AUDIO_OPUS,
                         muxerFactory = WebmMatroskaMuxerFactory(),
                         statusPrefix = "Convirtiendo video ${item.displayName} (${options.videoResolution.labelEs})",
                         onProgress = onItemProgress
@@ -210,7 +219,7 @@ class MediaEngineImpl(
                     editedMediaItem = editedMediaItem,
                     outputFile = tempOutput,
                     videoMimeType = MimeTypes.VIDEO_H264,
-                    audioMimeType = MimeTypes.AUDIO_AAC,
+                    audioMimeType = if (options.muteVideoAudio) null else MimeTypes.AUDIO_AAC,
                     muxerFactory = DefaultMuxer.Factory(),
                     statusPrefix = "Convirtiendo video ${item.displayName} (${options.videoResolution.labelEs})",
                     onProgress = onItemProgress
@@ -226,7 +235,8 @@ class MediaEngineImpl(
                 } else {
                     ""
                 }
-                "${item.baseNameWithoutExtension}$resSuffix"
+                val muteSuffix = if (options.muteVideoAudio) "_sin_audio" else ""
+                "${item.baseNameWithoutExtension}$resSuffix$muteSuffix"
             }
 
             val desiredFileName = UriFileResolver.buildOutputFileName(
@@ -243,6 +253,7 @@ class MediaEngineImpl(
             return ConversionJobResult(
                 sourceDisplayName = item.displayName,
                 sourceFormat = item.format,
+                sourceSizeBytes = item.sizeBytes,
                 outputDisplayName = saved.displayName,
                 outputFormat = targetFormat,
                 outputCategory = FormatCategory.MEDIA,
@@ -257,11 +268,6 @@ class MediaEngineImpl(
         }
     }
 
-    /**
-     * Extracción y conversión de audio (`MP3`, `AAC`, `M4A`, `WAV`) configurando
-     * `EditedMediaItem.Builder(mediaItem).setRemoveVideo(true).build()` en `Media3 Transformer`
-     * con polling continuo de `Transformer.getProgress(progressHolder)`.
-     */
     private suspend fun convertOrExtractAudioFile(
         item: InputFileItem,
         index: Int,
@@ -285,12 +291,11 @@ class MediaEngineImpl(
         )
 
         try {
-            val mediaItem = MediaItem.fromUri(android.net.Uri.fromFile(tempInput))
+            val mediaItem = buildMediaItemWithOptionalTrim(tempInput, options)
             val editedMediaItem = EditedMediaItem.Builder(mediaItem)
                 .setRemoveVideo(true)
                 .build()
 
-            // Fase 1: Ejecutar Media3 Transformer con setRemoveVideo(true) y polling de getProgress(progressHolder)
             val transformerWeight = when (targetFormat) {
                 SupportedFormat.M4A -> 1.0f
                 SupportedFormat.AAC -> 0.75f
@@ -323,12 +328,9 @@ class MediaEngineImpl(
                 if (targetFormat == SupportedFormat.M4A || targetFormat == SupportedFormat.AAC) {
                     throw e
                 }
-                // Si el archivo de entrada era un WAV/MP3 especial y el muxer intermedio falló,
-                // la Fase 2 decodificará directamente desde tempInput para WAV o MP3.
                 transformerExtractedOk = false
             }
 
-            // Fase 2: Finalizar codificación según el formato de audio destino
             when (targetFormat) {
                 SupportedFormat.M4A -> {
                     // tempFinalOutput ya contiene el M4A generado por Media3 Transformer
@@ -429,6 +431,7 @@ class MediaEngineImpl(
             return ConversionJobResult(
                 sourceDisplayName = item.displayName,
                 sourceFormat = item.format,
+                sourceSizeBytes = item.sizeBytes,
                 outputDisplayName = saved.displayName,
                 outputFormat = targetFormat,
                 outputCategory = FormatCategory.MEDIA,
@@ -444,10 +447,6 @@ class MediaEngineImpl(
         }
     }
 
-    /**
-     * Ejecuta `Media3 Transformer` en el hilo principal (`Dispatchers.Main`) y realiza polling
-     * del progreso cada 150 ms usando `Transformer.getProgress(progressHolder)`.
-     */
     private suspend fun runMedia3TransformerWithPolling(
         editedMediaItem: EditedMediaItem,
         outputFile: File,
@@ -523,10 +522,6 @@ class MediaEngineImpl(
         }
     }
 
-    /**
-     * `Muxer.Factory` nativo basado en `android.media.MediaMuxer(path, MUXER_OUTPUT_WEBM)`
-     * para contenedores `WEBM` y `MKV` (Matroska) en Media3 Transformer.
-     */
     private class WebmMatroskaMuxerFactory : Muxer.Factory {
 
         override fun create(path: String): Muxer {
@@ -616,9 +611,7 @@ class MediaEngineImpl(
             }
         }
 
-        override fun addMetadataEntry(metadataEntry: Metadata.Entry) {
-            // El contenedor WebM de MediaMuxer no requiere metadatos de ubicación MP4
-        }
+        override fun addMetadataEntry(metadataEntry: Metadata.Entry) {}
 
         override fun close() {
             if (isReleased) return

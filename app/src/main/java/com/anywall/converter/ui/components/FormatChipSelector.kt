@@ -23,9 +23,9 @@ import androidx.compose.ui.unit.dp
 import com.anywall.converter.domain.model.SupportedFormat
 
 /**
- * Selector inteligente de Formato Destino que presenta únicamente los formatos válidos
+ * Selector inteligente de Formato Destino (v0.2) que presenta únicamente los formatos válidos
  * para los archivos cargados, resaltando acciones por lote como "Unir en un solo PDF"
- * o "Empaquetar en ZIP".
+ * o "Empaquetar en ZIP / TAR.XZ / TAR.BZ2".
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -110,9 +110,7 @@ fun FormatChipSelector(
                     val isSelected = selectedFormat == format
                     val chipText = when {
                         format == SupportedFormat.EXTRACT_ARCHIVE -> "Extraer Contenido"
-                        format == SupportedFormat.ZIP && inputCount > 1 -> "Empaquetar en ZIP"
-                        format == SupportedFormat.TAR && inputCount > 1 -> "Empaquetar en TAR"
-                        format == SupportedFormat.TAR_GZ && inputCount > 1 -> "Empaquetar en TAR.GZ"
+                        inputCount > 1 -> "Empaquetar en ${format.label}"
                         else -> "Empaquetar (${format.label})"
                     }
                     FilterChip(

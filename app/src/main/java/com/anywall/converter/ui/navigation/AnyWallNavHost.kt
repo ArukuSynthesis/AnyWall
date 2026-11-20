@@ -15,9 +15,7 @@ import com.anywall.converter.ui.screens.HomeScreen
 import com.anywall.converter.ui.screens.MainViewModel
 
 /**
- * Grafo de navegación principal de AnyWall en Jetpack Compose.
- * Si el usuario selecciona archivos o comparte archivos desde Android Share Sheet,
- * navega automáticamente a `ConfigureScreen`.
+ * Grafo de navegación principal de AnyWall (v0.2) en Jetpack Compose.
  */
 @Composable
 fun AnyWallNavHost(
@@ -30,6 +28,10 @@ fun AnyWallNavHost(
     val filteredHistory by viewModel.filteredHistoryRecords.collectAsStateWithLifecycle()
     val selectedCategory by viewModel.selectedHistoryCategory.collectAsStateWithLifecycle()
     val searchQuery by viewModel.historySearchQuery.collectAsStateWithLifecycle()
+    val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
+    val autoCleanTempCache by viewModel.autoCleanTempCache.collectAsStateWithLifecycle()
+    val defaultStripExif by viewModel.defaultStripExif.collectAsStateWithLifecycle()
+    val tempCacheSizeBytes by viewModel.tempCacheSizeBytes.collectAsStateWithLifecycle()
 
     LaunchedEffect(viewModel) {
         viewModel.navigateToConfigureFlow.collect {
@@ -51,9 +53,26 @@ fun AnyWallNavHost(
             HomeScreen(
                 configureState = configureState,
                 recentHistory = allHistory,
+                thumbnailLoader = viewModel.thumbnailLoader,
+                themeMode = themeMode,
+                autoCleanTempCache = autoCleanTempCache,
+                defaultStripExif = defaultStripExif,
+                tempCacheSizeBytes = tempCacheSizeBytes,
+                onSelectThemeMode = viewModel::setThemeMode,
+                onToggleAutoCleanCache = viewModel::setAutoCleanTempCache,
+                onToggleDefaultStripExif = viewModel::setDefaultStripExif,
+                onRefreshTempCacheSize = viewModel::refreshTempCacheSize,
+                onClearTempCacheNow = viewModel::clearTempCacheNow,
                 onFilesSelected = { uris ->
                     viewModel.addInputUris(
                         uris = uris,
+                        replaceExisting = true,
+                        navigateToConfigure = true
+                    )
+                },
+                onFolderSelected = { treeUri ->
+                    viewModel.addInputFolderTree(
+                        treeUri = treeUri,
                         replaceExisting = true,
                         navigateToConfigure = true
                     )
@@ -78,6 +97,7 @@ fun AnyWallNavHost(
         composable(AnyWallDestination.CONFIGURE.route) {
             ConfigureScreen(
                 state = configureState,
+                thumbnailLoader = viewModel.thumbnailLoader,
                 onAddMoreFiles = { uris ->
                     viewModel.addInputUris(
                         uris = uris,
@@ -85,16 +105,38 @@ fun AnyWallNavHost(
                         navigateToConfigure = false
                     )
                 },
+                onAddFolderTree = { treeUri ->
+                    viewModel.addInputFolderTree(
+                        treeUri = treeUri,
+                        replaceExisting = false,
+                        navigateToConfigure = false
+                    )
+                },
+                onMoveFileUp = viewModel::moveInputFileUp,
+                onMoveFileDown = viewModel::moveInputFileDown,
+                onSortByName = viewModel::sortInputFilesByName,
+                onSortBySize = viewModel::sortInputFilesBySize,
+                onReverseOrder = viewModel::reverseInputFilesOrder,
+                onApplyVisualPdfEdits = viewModel::applyVisualPdfPageEdits,
+                onClearVisualPdfEdits = viewModel::clearVisualPdfPageEdits,
                 onRemoveFile = viewModel::removeInputFile,
                 onClearAllFiles = viewModel::clearInputFiles,
                 onSelectTargetFormat = viewModel::selectTargetFormat,
                 onUpdateQuality = viewModel::updateQualityPercent,
                 onUpdateMaxDimension = viewModel::updateMaxDimensionPx,
+                onUpdateImageRotation = viewModel::updateImageRotationDegrees,
+                onUpdateStripExif = viewModel::updateStripExifMetadata,
                 onUpdateVideoResolution = viewModel::updateVideoResolution,
+                onUpdateMuteVideoAudio = viewModel::updateMuteVideoAudio,
+                onUpdateTrimStartText = viewModel::updateTrimStartText,
+                onUpdateTrimEndText = viewModel::updateTrimEndText,
                 onUpdateCustomOutputName = viewModel::updateCustomOutputBaseName,
                 onUpdateMergeSinglePdf = viewModel::updateMergeIntoSinglePdf,
                 onUpdatePdfActionMode = viewModel::updatePdfActionMode,
                 onUpdatePageRangeSpec = viewModel::updatePageRangeSpec,
+                onUpdatePdfPassword = viewModel::updatePdfPassword,
+                onUpdatePdfPageSize = viewModel::updatePdfPageSize,
+                onUpdatePdfPageOrientation = viewModel::updatePdfPageOrientation,
                 onStartConversion = viewModel::startBatchConversion,
                 onCancelConversion = viewModel::cancelActiveConversion,
                 onNavigateBack = {
@@ -113,12 +155,16 @@ fun AnyWallNavHost(
         composable(AnyWallDestination.HISTORY.route) {
             HistoryScreen(
                 records = filteredHistory,
+                thumbnailLoader = viewModel.thumbnailLoader,
                 selectedCategory = selectedCategory,
                 searchQuery = searchQuery,
                 onSelectCategory = viewModel::selectHistoryCategoryFilter,
                 onSearchQueryChange = viewModel::updateHistorySearchQuery,
                 onDeleteRecord = { record ->
                     viewModel.deleteHistoryRecord(record, deletePhysicalFile = true)
+                },
+                onDeleteSelectedRecords = { selected ->
+                    viewModel.deleteHistoryRecords(selected, deletePhysicalFiles = true)
                 },
                 onClearAllHistory = {
                     viewModel.clearAllHistory(deletePhysicalFiles = true)

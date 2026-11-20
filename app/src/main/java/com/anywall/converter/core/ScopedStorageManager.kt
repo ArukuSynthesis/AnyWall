@@ -27,7 +27,7 @@ data class SavedOutputFile(
 )
 
 /**
- * Gestor de almacenamiento seguro (Scoped Storage):
+ * Gestor de almacenamiento seguro (Scoped Storage - v0.2):
  * - En Android 10+ (API 29+): Guarda los archivos en `Downloads/AnyWall/` usando `MediaStore.Downloads`
  *   con `IS_PENDING` para escritura atómica y segura sin requerir permisos de almacenamiento.
  * - En Android 8.0 - 9.0 (API 26-28): Guarda en el directorio público `Downloads/AnyWall/` y expone
@@ -185,16 +185,7 @@ class ScopedStorageManager(private val context: Context) {
         if (!exists) return displayName
 
         val stamp = (System.currentTimeMillis() % 100000).toString()
-        return if (displayName.endsWith(".tar.gz", ignoreCase = true)) {
-            val base = displayName.dropLast(7)
-            "${base}_$stamp.tar.gz"
-        } else if (displayName.contains('.')) {
-            val base = displayName.substringBeforeLast('.')
-            val ext = displayName.substringAfterLast('.')
-            "${base}_$stamp.$ext"
-        } else {
-            "${displayName}_$stamp"
-        }
+        return appendUniqueStampToFileName(displayName, stamp)
     }
 
     @Throws(IOException::class)
@@ -223,14 +214,7 @@ class ScopedStorageManager(private val context: Context) {
         var destFile = File(targetDir, displayName)
         if (destFile.exists()) {
             val stamp = (System.currentTimeMillis() % 100000).toString()
-            val newName = if (displayName.endsWith(".tar.gz", ignoreCase = true)) {
-                "${displayName.dropLast(7)}_$stamp.tar.gz"
-            } else if (displayName.contains('.')) {
-                "${displayName.substringBeforeLast('.')}_$stamp.${displayName.substringAfterLast('.')}"
-            } else {
-                "${displayName}_$stamp"
-            }
-            destFile = File(targetDir, newName)
+            destFile = File(targetDir, appendUniqueStampToFileName(displayName, stamp))
         }
 
         var writtenBytes = 0L
@@ -252,6 +236,21 @@ class ScopedStorageManager(private val context: Context) {
             sizeBytes = writtenBytes.coerceAtLeast(destFile.length()),
             mimeType = mimeType
         )
+    }
+
+    private fun appendUniqueStampToFileName(displayName: String, stamp: String): String {
+        return when {
+            displayName.endsWith(".tar.gz", ignoreCase = true) ->
+                "${displayName.dropLast(7)}_$stamp.tar.gz"
+            displayName.endsWith(".tar.xz", ignoreCase = true) ->
+                "${displayName.dropLast(7)}_$stamp.tar.xz"
+            displayName.endsWith(".tar.bz2", ignoreCase = true) ->
+                "${displayName.dropLast(8)}_$stamp.tar.bz2"
+            displayName.contains('.') ->
+                "${displayName.substringBeforeLast('.')}_$stamp.${displayName.substringAfterLast('.')}"
+            else ->
+                "${displayName}_$stamp"
+        }
     }
 
     /**

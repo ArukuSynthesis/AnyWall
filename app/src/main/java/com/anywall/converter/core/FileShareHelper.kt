@@ -11,8 +11,9 @@ import com.anywall.converter.domain.model.HistoryRecord
 import java.io.File
 
 /**
- * Utilidad para abrir (`Intent.ACTION_VIEW`) y compartir (`Intent.ACTION_SEND`)
- * archivos convertidos usando URIs seguras de `MediaStore` o `FileProvider`.
+ * Utilidad para abrir (`Intent.ACTION_VIEW`) y compartir uno (`Intent.ACTION_SEND`)
+ * o múltiples (`Intent.ACTION_SEND_MULTIPLE`) archivos convertidos usando URIs seguras
+ * de `MediaStore` o `FileProvider`.
  */
 object FileShareHelper {
 
@@ -20,7 +21,6 @@ object FileShareHelper {
         if (record.outputUriString.isNotBlank()) {
             val parsed = Uri.parse(record.outputUriString)
             if (parsed.scheme == ContentResolver.SCHEME_CONTENT) {
-                // Verificar si el descriptor sigue siendo accesible
                 val accessible = try {
                     context.contentResolver.openAssetFileDescriptor(parsed, "r")?.use { true } ?: false
                 } catch (_: Throwable) {
@@ -107,6 +107,48 @@ object FileShareHelper {
         }
 
         val chooser = Intent.createChooser(sendIntent, "Compartir ${record.outputDisplayName}").apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        context.startActivity(chooser)
+    }
+
+    /**
+     * Comparte múltiples archivos seleccionados del historial en una sola acción (`ACTION_SEND_MULTIPLE`).
+     */
+    fun shareMultipleConvertedFiles(context: Context, records: List<HistoryRecord>) {
+        if (records.isEmpty()) return
+        if (records.size == 1) {
+            shareConvertedFile(context, records.first())
+            return
+        }
+
+        val uris = ArrayList<Uri>()
+        for (record in records) {
+            resolveShareableUri(context, record)?.let(uris::add)
+        }
+
+        if (uris.isEmpty()) {
+            Toast.makeText(
+                context,
+                "Los archivos seleccionados ya no están disponibles en el almacenamiento.",
+                Toast.LENGTH_SHORT
+            ).show()
+            return
+        }
+
+        val distinctMimes = records.map { it.outputMimeType }.filter { it.isNotBlank() && it != "resource/folder" }.distinct()
+        val commonMime = if (distinctMimes.size == 1) distinctMimes.first() else "*/*"
+
+        val sendMultipleIntent = Intent(Intent.ACTION_SEND_MULTIPLE).apply {
+            type = commonMime
+            putParcelableArrayListExtra(Intent.EXTRA_STREAM, uris)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+
+        val chooser = Intent.createChooser(
+            sendMultipleIntent,
+            "Compartir ${uris.size} archivos convertidos"
+        ).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
         context.startActivity(chooser)

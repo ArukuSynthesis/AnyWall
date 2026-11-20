@@ -21,13 +21,16 @@ import com.anywall.converter.domain.model.ConversionJobResult
 import com.anywall.converter.domain.model.ConversionOptions
 import com.anywall.converter.domain.model.FormatCategory
 import com.anywall.converter.domain.model.InputFileItem
+import com.anywall.converter.domain.model.PdfPageEditItem
 import com.anywall.converter.domain.model.SupportedFormat
 import com.caverock.androidsvg.SVG
+import com.tom_roush.pdfbox.pdmodel.PDDocument
+import com.tom_roush.pdfbox.pdmodel.encryption.AccessPermission
+import com.tom_roush.pdfbox.pdmodel.encryption.StandardProtectionPolicy
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import java.io.BufferedOutputStream
-import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
@@ -40,11 +43,14 @@ import kotlin.math.max
 import kotlin.math.roundToInt
 
 /**
- * Motor 1: `ImageEngineImpl` (Imágenes y PDF básico)
- * - Conversión bidireccional entre JPG, PNG, WEBP y BMP respetando calidad (10% - 100%) y redimensionado máximo.
+ * Motor 1: `ImageEngineImpl` (Imágenes y PDF básico - v0.2)
+ * - Conversión entre JPG, PNG, WEBP y BMP (más soporte de entrada HEIC/HEIF, GIF y SVG),
+ *   respetando porcentaje de calidad (10% - 100%), redimensionado máximo, rotación (0°/90°/180°/270°)
+ *   y eliminación de metadatos EXIF/GPS para privacidad total.
  * - Renderizado de SVG a PNG, JPG, WEBP, BMP o PDF usando `com.caverock.androidsvg.SVG`.
- * - Conversión de una o múltiples imágenes a un único archivo PDF mediante `android.graphics.pdf.PdfDocument`.
- * - Extracción de páginas de un PDF a imágenes individuales (JPG o PNG) mediante `android.graphics.pdf.PdfRenderer`.
+ * - Conversión de una o múltiples imágenes a un único archivo PDF mediante `android.graphics.pdf.PdfDocument`
+ *   con soporte opcional de cifrado por contraseña.
+ * - Extracción de páginas de un PDF a imágenes individuales (JPG, PNG, WEBP, BMP) mediante `android.graphics.pdf.PdfRenderer`.
  */
 class ImageEngineImpl(
     private val context: Context,
@@ -52,34 +58,36 @@ class ImageEngineImpl(
     private val storageManager: ScopedStorageManager
 ) : FileConverterEngine {
 
-    private val rasterFormats = setOf(
+    private val rasterOutputFormats = setOf(
         SupportedFormat.JPG,
         SupportedFormat.PNG,
         SupportedFormat.WEBP,
         SupportedFormat.BMP
     )
 
-    private val imageFormats = rasterFormats + SupportedFormat.SVG
+    private val imageInputFormats = rasterOutputFormats + setOf(
+        SupportedFormat.SVG,
+        SupportedFormat.HEIC,
+        SupportedFormat.GIF
+    )
 
     override fun canHandle(format: SupportedFormat): Boolean {
-        return format in imageFormats || format == SupportedFormat.PDF
+        return format in imageInputFormats || format == SupportedFormat.PDF
     }
 
     override fun getSupportedTargetFormats(sourceFormats: List<SupportedFormat>): List<SupportedFormat> {
         if (sourceFormats.isEmpty()) return emptyList()
         val distinct = sourceFormats.distinct()
 
-        // Caso 1: Todos los archivos son imágenes (JPG, PNG, WEBP, BMP, SVG)
-        if (distinct.all { it in imageFormats }) {
-            val targets = linkedSetOf(
+        // Caso 1: Todos los archivos son imágenes (JPG, PNG, WEBP, BMP, SVG, HEIC, GIF)
+        if (distinct.all { it in imageInputFormats }) {
+            return listOf(
                 SupportedFormat.JPG,
                 SupportedFormat.PNG,
                 SupportedFormat.WEBP,
                 SupportedFormat.BMP,
                 SupportedFormat.PDF
             )
-            // Si sólo hay un formato de entrada y un único archivo, aún permitimos recomprimir al mismo formato
-            return targets.toList()
         }
 
         // Caso 2: Todos los archivos son PDF -> permite extraer páginas a JPG o PNG
@@ -102,7 +110,7 @@ class ImageEngineImpl(
         require(inputs.isNotEmpty()) { "La lista de imágenes de entrada está vacía." }
 
         // Caso A: Extracción de páginas de PDF a imágenes individuales (JPG / PNG)
-        if (inputs.all { it.format == SupportedFormat.PDF } && targetFormat in rasterFormats) {
+        if (inputs.all { it.format == SupportedFormat.PDF } && targetFormat in rasterOutputFormats) {
             return@withContext extractPdfPagesToImages(inputs, targetFormat, options, onProgress)
         }
 
@@ -111,8 +119,8 @@ class ImageEngineImpl(
             return@withContext convertImagesToPdf(inputs, options, onProgress)
         }
 
-        // Caso C: Conversión de imagen (JPG, PNG, WEBP, BMP, SVG) a formato raster (JPG, PNG, WEBP, BMP)
-        if (targetFormat in rasterFormats) {
+        // Caso C: Conversión de imagen (JPG, PNG, WEBP, BMP, SVG, HEIC, GIF) a formato raster (JPG, PNG, WEBP, BMP)
+        if (targetFormat in rasterOutputFormats) {
             return@withContext convertImagesToRaster(inputs, targetFormat, options, onProgress)
         }
 
@@ -138,6 +146,7 @@ class ImageEngineImpl(
             val decoded = decodeInputToBitmap(
                 item = item,
                 maxDimensionPx = options.maxDimensionPx,
+                rotationDegrees = options.normalizedRotationDegrees,
                 opaqueWhiteBackground = (targetFormat == SupportedFormat.JPG || targetFormat == SupportedFormat.BMP)
             )
 
@@ -186,6 +195,7 @@ class ImageEngineImpl(
                 ConversionJobResult(
                     sourceDisplayName = item.displayName,
                     sourceFormat = item.format,
+                    sourceSizeBytes = item.sizeBytes,
                     outputDisplayName = saved.displayName,
                     outputFormat = targetFormat,
                     outputCategory = FormatCategory.IMAGE,
@@ -212,7 +222,6 @@ class ImageEngineImpl(
         val mergeSingle = options.mergeIntoSinglePdf || total == 1
 
         if (!mergeSingle) {
-            // Un PDF individual por cada imagen
             val results = mutableListOf<ConversionJobResult>()
             inputs.forEachIndexed { index, item ->
                 coroutineContext.ensureActive()
@@ -244,17 +253,16 @@ class ImageEngineImpl(
         try {
             inputs.forEachIndexed { index, item ->
                 coroutineContext.ensureActive()
-                val progress = (index.toFloat() / total.toFloat()) * 0.9f
+                val progress = (index.toFloat() / total.toFloat()) * 0.88f
                 onProgress(progress, "Añadiendo imagen ${index + 1} de $total al PDF: ${item.displayName}")
 
                 val rawBitmap = decodeInputToBitmap(
                     item = item,
                     maxDimensionPx = options.maxDimensionPx ?: 2480,
+                    rotationDegrees = options.normalizedRotationDegrees,
                     opaqueWhiteBackground = true
                 )
 
-                // Si la calidad es < 100, recomprimimos en memoria a JPEG con el porcentaje indicado
-                // para reducir efectivamente el peso del PDF generado.
                 val pageBitmap = if (options.clampedQuality < 98) {
                     val baos = ByteArrayOutputStream()
                     rawBitmap.compress(Bitmap.CompressFormat.JPEG, options.clampedQuality, baos)
@@ -280,7 +288,7 @@ class ImageEngineImpl(
                 }
             }
 
-            onProgress(0.93f, "Escribiendo documento PDF final…")
+            onProgress(0.92f, "Escribiendo documento PDF final…")
             FileOutputStream(tempPdfFile).use { fos ->
                 BufferedOutputStream(fos, 64 * 1024).use { bos ->
                     pdfDocument.writeTo(bos)
@@ -289,6 +297,12 @@ class ImageEngineImpl(
             }
         } finally {
             pdfDocument.close()
+        }
+
+        // Si el usuario especificó contraseña para proteger el PDF resultante, cifrarlo con PDFBox
+        if (options.pdfPassword.isNotBlank()) {
+            onProgress(0.96f, "Cifrando PDF con contraseña…")
+            encryptPdfFileInPlace(tempPdfFile, options.pdfPassword)
         }
 
         val baseName = when {
@@ -310,6 +324,7 @@ class ImageEngineImpl(
 
         onProgress(1f, "PDF generado: ${saved.displayName}")
         val firstInput = inputs.first()
+        val totalSourceBytes = inputs.sumOf { it.sizeBytes }
         val sourceDesc = if (inputs.size == 1) {
             firstInput.displayName
         } else {
@@ -320,6 +335,7 @@ class ImageEngineImpl(
             ConversionJobResult(
                 sourceDisplayName = sourceDesc,
                 sourceFormat = firstInput.format,
+                sourceSizeBytes = totalSourceBytes,
                 outputDisplayName = saved.displayName,
                 outputFormat = SupportedFormat.PDF,
                 outputCategory = FormatCategory.DOCUMENT,
@@ -329,6 +345,20 @@ class ImageEngineImpl(
                 outputMimeType = saved.mimeType
             )
         )
+    }
+
+    private fun encryptPdfFileInPlace(pdfFile: File, password: String) {
+        val cleanPass = password.trim()
+        if (cleanPass.isEmpty()) return
+        PDDocument.load(pdfFile).use { doc ->
+            val accessPermission = AccessPermission()
+            val policy = StandardProtectionPolicy(cleanPass, cleanPass, accessPermission).apply {
+                encryptionKeyLength = 128
+                permissions = accessPermission
+            }
+            doc.protect(policy)
+            doc.save(pdfFile)
+        }
     }
 
     private suspend fun extractPdfPagesToImages(
@@ -351,10 +381,28 @@ class ImageEngineImpl(
                             throw IOException("El archivo PDF '${item.displayName}' no contiene páginas.")
                         }
 
-                        val selectedPages = parsePageIndices(options.pageRangeSpec, pageCount)
-                        val totalPagesToRender = selectedPages.size
+                        val visualEditsForFile = if (options.hasVisualPdfEdits) {
+                            PdfPageEditItem.fromJsonArrayString(options.pdfVisualPageEditsJson)
+                                .filter { it.included && it.sourceUriString == item.uri.toString() }
+                        } else {
+                            emptyList()
+                        }
 
-                        selectedPages.forEachIndexed { idx, pageIndex ->
+                        val pageIndexAndRotationList: List<Pair<Int, Int>> = if (visualEditsForFile.isNotEmpty()) {
+                            visualEditsForFile
+                                .filter { it.originalPageIndex in 0 until pageCount }
+                                .map { it.originalPageIndex to ((it.normalizedRotation + options.normalizedRotationDegrees) % 360) }
+                        } else if (options.hasVisualPdfEdits) {
+                            emptyList()
+                        } else {
+                            parsePageIndices(options.pageRangeSpec, pageCount)
+                                .map { it to options.normalizedRotationDegrees }
+                        }
+
+                        val totalPagesToRender = pageIndexAndRotationList.size.coerceAtLeast(1)
+                        val approxSourceBytesPerPage = (item.sizeBytes / pageCount.coerceAtLeast(1)).coerceAtLeast(1L)
+
+                        pageIndexAndRotationList.forEachIndexed { idx, (pageIndex, combinedRotation) ->
                             coroutineContext.ensureActive()
                             val fileBaseProgress = fileIdx.toFloat() / totalFiles.toFloat()
                             val pageFraction = idx.toFloat() / totalPagesToRender.toFloat()
@@ -365,7 +413,6 @@ class ImageEngineImpl(
                             )
 
                             renderer.openPage(pageIndex).use { page ->
-                                // Escala de alta definición (2x = ~144 DPI) respetando maxDimensionPx si se configuró
                                 val defaultScale = 2.0f
                                 var targetW = (page.width * defaultScale).roundToInt().coerceAtLeast(1)
                                 var targetH = (page.height * defaultScale).roundToInt().coerceAtLeast(1)
@@ -377,17 +424,24 @@ class ImageEngineImpl(
                                     targetH = (targetH * ratio).roundToInt().coerceAtLeast(1)
                                 }
 
-                                val bitmap = Bitmap.createBitmap(targetW, targetH, Bitmap.Config.ARGB_8888)
+                                val rawBitmap = Bitmap.createBitmap(targetW, targetH, Bitmap.Config.ARGB_8888)
+                                val finalBitmap: Bitmap
                                 try {
-                                    val canvas = Canvas(bitmap)
+                                    val canvas = Canvas(rawBitmap)
                                     canvas.drawColor(Color.WHITE)
                                     page.render(
-                                        bitmap,
+                                        rawBitmap,
                                         Rect(0, 0, targetW, targetH),
                                         null,
                                         PdfRenderer.Page.RENDER_MODE_FOR_PRINT
                                     )
+                                    finalBitmap = rotateBitmapIfNeeded(rawBitmap, combinedRotation)
+                                } catch (t: Throwable) {
+                                    rawBitmap.recycle()
+                                    throw t
+                                }
 
+                                try {
                                     val tempImg = uriResolver.createTempWorkingFile(
                                         prefix = "pdf_page_",
                                         extension = targetFormat.extension
@@ -396,7 +450,7 @@ class ImageEngineImpl(
                                         FileOutputStream(tempImg).use { fos ->
                                             BufferedOutputStream(fos, 64 * 1024).use { bos ->
                                                 encodeBitmapToStream(
-                                                    bitmap = bitmap,
+                                                    bitmap = finalBitmap,
                                                     targetFormat = targetFormat,
                                                     quality = options.clampedQuality,
                                                     output = bos
@@ -426,6 +480,7 @@ class ImageEngineImpl(
                                             ConversionJobResult(
                                                 sourceDisplayName = "${item.displayName} (Pág. ${pageIndex + 1})",
                                                 sourceFormat = item.format,
+                                                sourceSizeBytes = approxSourceBytesPerPage,
                                                 outputDisplayName = saved.displayName,
                                                 outputFormat = targetFormat,
                                                 outputCategory = FormatCategory.IMAGE,
@@ -439,7 +494,7 @@ class ImageEngineImpl(
                                         tempImg.delete()
                                     }
                                 } finally {
-                                    bitmap.recycle()
+                                    finalBitmap.recycle()
                                 }
                             }
                         }
@@ -454,15 +509,11 @@ class ImageEngineImpl(
         return results
     }
 
-    /**
-     * Decodifica una imagen raster (JPG, PNG, WEBP, BMP) o vectorial (SVG) a un `Bitmap` en memoria,
-     * aplicando redimensionado máximo si se solicita y aplanando el canal alfa sobre blanco cuando
-     * el formato destino no admite transparencia (JPG, BMP, PDF).
-     */
     @Throws(IOException::class)
     private fun decodeInputToBitmap(
         item: InputFileItem,
         maxDimensionPx: Int?,
+        rotationDegrees: Int,
         opaqueWhiteBackground: Boolean
     ): Bitmap {
         val rawBitmap = if (item.format == SupportedFormat.SVG) {
@@ -477,11 +528,27 @@ class ImageEngineImpl(
             rawBitmap
         }
 
+        val rotatedBitmap = rotateBitmapIfNeeded(scaledBitmap, rotationDegrees)
+
         return if (opaqueWhiteBackground) {
-            flattenAlphaToWhite(scaledBitmap)
+            flattenAlphaToWhite(rotatedBitmap)
         } else {
-            ensureSoftwareBitmap(scaledBitmap)
+            ensureSoftwareBitmap(rotatedBitmap)
         }
+    }
+
+    private fun rotateBitmapIfNeeded(source: Bitmap, rotationDegrees: Int): Bitmap {
+        val norm = ((rotationDegrees % 360) + 360) % 360
+        if (norm == 0) return source
+        val sw = ensureSoftwareBitmap(source)
+        val matrix = Matrix().apply {
+            postRotate(norm.toFloat())
+        }
+        val rotated = Bitmap.createBitmap(sw, 0, 0, sw.width, sw.height, matrix, true)
+        if (rotated !== sw) {
+            sw.recycle()
+        }
+        return rotated
     }
 
     @Throws(IOException::class)
@@ -663,10 +730,6 @@ class ImageEngineImpl(
         output.flush()
     }
 
-    /**
-     * Codificador nativo de formato Windows Bitmap (BMP 24-bit BGR sin compresión).
-     * Garantiza soporte real para `.bmp` en todas las versiones de Android sin depender de librerías externas.
-     */
     @Throws(IOException::class)
     private fun writeBitmapAs24BitBmp(bitmap: Bitmap, output: OutputStream) {
         val width = bitmap.width
@@ -678,24 +741,22 @@ class ImageEngineImpl(
         val fileSize = 54 + pixelDataSize
 
         val header = ByteBuffer.allocate(54).order(ByteOrder.LITTLE_ENDIAN)
-        // BITMAPFILEHEADER (14 bytes)
         header.put(0x42.toByte()) // 'B'
         header.put(0x4D.toByte()) // 'M'
         header.putInt(fileSize)
         header.putShort(0)
         header.putShort(0)
-        header.putInt(54) // Offset a datos de píxeles
+        header.putInt(54)
 
-        // BITMAPINFOHEADER (40 bytes)
-        header.putInt(40) // Tamaño del header DIB
+        header.putInt(40)
         header.putInt(width)
-        header.putInt(height) // Positivo = orden de filas bottom-up estándar
-        header.putShort(1) // Planes
-        header.putShort(24) // 24 bits por píxel (BGR)
-        header.putInt(0) // BI_RGB (sin compresión)
+        header.putInt(height)
+        header.putShort(1)
+        header.putShort(24)
+        header.putInt(0)
         header.putInt(pixelDataSize)
-        header.putInt(2835) // ~72 DPI horizontal
-        header.putInt(2835) // ~72 DPI vertical
+        header.putInt(2835)
+        header.putInt(2835)
         header.putInt(0)
         header.putInt(0)
 
@@ -703,15 +764,14 @@ class ImageEngineImpl(
 
         val pixels = IntArray(width)
         val rowBuffer = ByteArray(rowStride)
-        // BMP almacena las filas desde la inferior (height - 1) hasta la superior (0)
         for (y in (height - 1) downTo 0) {
             bitmap.getPixels(pixels, 0, width, 0, y, width, 1)
             var offset = 0
             for (x in 0 until width) {
                 val argb = pixels[x]
-                rowBuffer[offset++] = (argb and 0xFF).toByte() // Blue
-                rowBuffer[offset++] = ((argb shr 8) and 0xFF).toByte() // Green
-                rowBuffer[offset++] = ((argb shr 16) and 0xFF).toByte() // Red
+                rowBuffer[offset++] = (argb and 0xFF).toByte()
+                rowBuffer[offset++] = ((argb shr 8) and 0xFF).toByte()
+                rowBuffer[offset++] = ((argb shr 16) and 0xFF).toByte()
             }
             for (p in 0 until rowPadding) {
                 rowBuffer[offset++] = 0
@@ -721,10 +781,6 @@ class ImageEngineImpl(
     }
 
     companion object {
-        /**
-         * Parsea una especificación de páginas en base 1 (por ejemplo: "1-3, 5, 7-9")
-         * y devuelve la lista ordenada de índices en base 0 dentro de `0 until totalPages`.
-         */
         fun parsePageIndices(rangeSpec: String, totalPages: Int): List<Int> {
             if (totalPages <= 0) return emptyList()
             val clean = rangeSpec.trim()

@@ -31,6 +31,9 @@ interface ConversionHistoryDao {
     @Query("DELETE FROM conversion_history WHERE id = :id")
     suspend fun deleteById(id: Long): Int
 
+    @Query("DELETE FROM conversion_history WHERE id IN (:ids)")
+    suspend fun deleteByIds(ids: List<Long>): Int
+
     @Query("DELETE FROM conversion_history")
     suspend fun deleteAll()
 }

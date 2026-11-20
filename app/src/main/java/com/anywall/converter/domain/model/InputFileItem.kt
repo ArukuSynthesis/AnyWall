@@ -18,6 +18,8 @@ data class InputFileItem(
             val lower = displayName.lowercase(Locale.ROOT)
             return when {
                 lower.endsWith(".tar.gz") -> displayName.dropLast(7)
+                lower.endsWith(".tar.xz") -> displayName.dropLast(7)
+                lower.endsWith(".tar.bz2") -> displayName.dropLast(8)
                 lower.contains('.') -> displayName.substringBeforeLast('.')
                 else -> displayName
             }.ifBlank { "archivo" }

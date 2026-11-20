@@ -11,19 +11,23 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.anywall.converter.core.AppThemeMode
 import com.anywall.converter.ui.navigation.AnyWallNavHost
 import com.anywall.converter.ui.screens.MainViewModel
 import com.anywall.converter.ui.theme.AnyWallTheme
 
 /**
- * Actividad principal de AnyWall: Universal Converter.
+ * Actividad principal de AnyWall: Universal Converter (v0.2).
  * Gestiona la recepción de archivos compartidos desde Android Share Sheet (`ACTION_SEND`
- * y `ACTION_SEND_MULTIPLE`) tanto al iniciar la aplicación como en `onNewIntent`.
+ * y `ACTION_SEND_MULTIPLE`) y aplica en vivo la preferencia de tema claro/oscuro.
  */
 class MainActivity : ComponentActivity() {
 
@@ -46,7 +50,14 @@ class MainActivity : ComponentActivity() {
         }
 
         setContent {
-            AnyWallTheme {
+            val themeMode by mainViewModel.themeMode.collectAsStateWithLifecycle()
+            val darkTheme = when (themeMode) {
+                AppThemeMode.SYSTEM -> isSystemInDarkTheme()
+                AppThemeMode.LIGHT -> false
+                AppThemeMode.DARK -> true
+            }
+
+            AnyWallTheme(darkTheme = darkTheme) {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
@@ -63,10 +74,6 @@ class MainActivity : ComponentActivity() {
         handleIncomingShareIntent(intent)
     }
 
-    /**
-     * Extrae una o múltiples URIs recibidas desde WhatsApp, Galería o cualquier explorador
-     * mediante `Intent.ACTION_SEND` o `Intent.ACTION_SEND_MULTIPLE` y abre directo `ConfigureScreen`.
-     */
     private fun handleIncomingShareIntent(incomingIntent: Intent?) {
         if (incomingIntent == null) return
         val action = incomingIntent.action ?: return
@@ -102,7 +109,6 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        // También inspeccionar ClipData por si la app emisora adjuntó las URIs ahí
         val clipData = incomingIntent.clipData
         if (clipData != null) {
             for (i in 0 until clipData.itemCount) {

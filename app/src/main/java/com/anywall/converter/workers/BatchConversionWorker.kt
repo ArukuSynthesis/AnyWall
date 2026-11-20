@@ -9,6 +9,8 @@ import com.anywall.converter.AnyWallApplication
 import com.anywall.converter.domain.model.ConversionOptions
 import com.anywall.converter.domain.model.InputFileItem
 import com.anywall.converter.domain.model.PdfActionMode
+import com.anywall.converter.domain.model.PdfPageOrientation
+import com.anywall.converter.domain.model.PdfPageSize
 import com.anywall.converter.domain.model.SupportedFormat
 import com.anywall.converter.domain.model.VideoResolution
 import org.json.JSONArray
@@ -17,7 +19,7 @@ import java.io.File
 import java.util.concurrent.CancellationException
 
 /**
- * `CoroutineWorker` de WorkManager que ejecuta todas las conversiones de AnyWall en segundo plano,
+ * `CoroutineWorker` de WorkManager que ejecuta todas las conversiones de AnyWall en segundo plano (v0.2),
  * manteniendo una notificación persistente con barra de progreso real y registrando los resultados
  * en la base de datos local Room.
  */
@@ -35,7 +37,6 @@ class BatchConversionWorker(
         val engineRegistry = container.converterEngineRegistry
         val historyRepository = container.historyRepository
 
-        // Activar servicio en primer plano con notificación persistente y barra de progreso real
         try {
             setForeground(notificationHelper.createForegroundInfo(0f, "Preparando archivos…"))
         } catch (_: Throwable) {
@@ -77,7 +78,6 @@ class BatchConversionWorker(
                 }
             }
 
-            // Registrar cada archivo generado en la base de datos Room
             historyRepository.recordConversions(results)
 
             val doneMsg = "Conversión completada (${results.size} ${if (results.size == 1) "archivo" else "archivos"})"
@@ -130,11 +130,20 @@ class BatchConversionWorker(
             val options = ConversionOptions(
                 qualityPercent = json.optInt("qualityPercent", 85),
                 maxDimensionPx = json.optInt("maxDimensionPx", -1).takeIf { it > 0 },
+                imageRotationDegrees = json.optInt("imageRotationDegrees", 0),
+                stripExifMetadata = json.optBoolean("stripExifMetadata", true),
                 videoResolution = VideoResolution.fromNameOrDefault(json.optString("videoResolution")),
+                muteVideoAudio = json.optBoolean("muteVideoAudio", false),
+                trimStartSeconds = json.optLong("trimStartSeconds", -1L).takeIf { it >= 0L },
+                trimEndSeconds = json.optLong("trimEndSeconds", -1L).takeIf { it > 0L },
                 customOutputBaseName = json.optString("customOutputBaseName", ""),
                 mergeIntoSinglePdf = json.optBoolean("mergeIntoSinglePdf", true),
                 pdfActionMode = PdfActionMode.fromNameOrDefault(json.optString("pdfActionMode")),
-                pageRangeSpec = json.optString("pageRangeSpec", "")
+                pageRangeSpec = json.optString("pageRangeSpec", ""),
+                pdfPassword = json.optString("pdfPassword", ""),
+                pdfPageSize = PdfPageSize.fromNameOrDefault(json.optString("pdfPageSize")),
+                pdfPageOrientation = PdfPageOrientation.fromNameOrDefault(json.optString("pdfPageOrientation")),
+                pdfVisualPageEditsJson = json.optString("pdfVisualPageEditsJson", "")
             )
 
             val itemsArray = json.optJSONArray("inputs") ?: JSONArray()
@@ -164,7 +173,6 @@ class BatchConversionWorker(
             return Triple(inputs, targetFormat, options)
         }
 
-        // Fallback desde WorkManager Data directo
         val targetFormatName = inputData.getString(KEY_TARGET_FORMAT)
         val targetFormat = SupportedFormat.fromNameOrNull(targetFormatName)
             ?: throw IllegalArgumentException("Formato destino no especificado.")
@@ -175,11 +183,19 @@ class BatchConversionWorker(
         val options = ConversionOptions(
             qualityPercent = inputData.getInt(KEY_QUALITY_PERCENT, 85),
             maxDimensionPx = inputData.getInt(KEY_MAX_DIMENSION_PX, -1).takeIf { it > 0 },
+            imageRotationDegrees = inputData.getInt(KEY_IMAGE_ROTATION, 0),
+            stripExifMetadata = inputData.getBoolean(KEY_STRIP_EXIF, true),
             videoResolution = VideoResolution.fromNameOrDefault(inputData.getString(KEY_VIDEO_RESOLUTION)),
+            muteVideoAudio = inputData.getBoolean(KEY_MUTE_VIDEO_AUDIO, false),
+            trimStartSeconds = inputData.getLong(KEY_TRIM_START_SECONDS, -1L).takeIf { it >= 0L },
+            trimEndSeconds = inputData.getLong(KEY_TRIM_END_SECONDS, -1L).takeIf { it > 0L },
             customOutputBaseName = inputData.getString(KEY_CUSTOM_OUTPUT_NAME).orEmpty(),
             mergeIntoSinglePdf = inputData.getBoolean(KEY_MERGE_SINGLE_PDF, true),
             pdfActionMode = PdfActionMode.fromNameOrDefault(inputData.getString(KEY_PDF_ACTION_MODE)),
-            pageRangeSpec = inputData.getString(KEY_PAGE_RANGE_SPEC).orEmpty()
+            pageRangeSpec = inputData.getString(KEY_PAGE_RANGE_SPEC).orEmpty(),
+            pdfPassword = inputData.getString(KEY_PDF_PASSWORD).orEmpty(),
+            pdfPageSize = PdfPageSize.fromNameOrDefault(inputData.getString(KEY_PDF_PAGE_SIZE)),
+            pdfPageOrientation = PdfPageOrientation.fromNameOrDefault(inputData.getString(KEY_PDF_PAGE_ORIENTATION))
         )
         return Triple(inputs, targetFormat, options)
     }
@@ -193,11 +209,19 @@ class BatchConversionWorker(
         const val KEY_TARGET_FORMAT = "target_format"
         const val KEY_QUALITY_PERCENT = "quality_percent"
         const val KEY_MAX_DIMENSION_PX = "max_dimension_px"
+        const val KEY_IMAGE_ROTATION = "image_rotation"
+        const val KEY_STRIP_EXIF = "strip_exif"
         const val KEY_VIDEO_RESOLUTION = "video_resolution"
+        const val KEY_MUTE_VIDEO_AUDIO = "mute_video_audio"
+        const val KEY_TRIM_START_SECONDS = "trim_start_seconds"
+        const val KEY_TRIM_END_SECONDS = "trim_end_seconds"
         const val KEY_CUSTOM_OUTPUT_NAME = "custom_output_name"
         const val KEY_MERGE_SINGLE_PDF = "merge_single_pdf"
         const val KEY_PDF_ACTION_MODE = "pdf_action_mode"
         const val KEY_PAGE_RANGE_SPEC = "page_range_spec"
+        const val KEY_PDF_PASSWORD = "pdf_password"
+        const val KEY_PDF_PAGE_SIZE = "pdf_page_size"
+        const val KEY_PDF_PAGE_ORIENTATION = "pdf_page_orientation"
 
         const val KEY_PROGRESS = "progress"
         const val KEY_STATUS = "status"

@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Etiqueta de versión (ej. v0.1)'
+        description: 'Etiqueta de versión (ej. v0.2)'
         required: true
-        default: 'v0.1'
+        default: 'v0.2'
 
 permissions:
   contents: write
@@ -24,7 +24,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Configurar JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: 'temurin'
           java-version: '17'
@@ -131,15 +131,15 @@ jobs:
           cat > "${RUNNER_TEMP}/release_notes.md" <<EOF
           ## AnyWall: Universal Converter ${TAG}
 
-          Versión release compilada, firmada y auditada automáticamente de **AnyWall: Universal Converter** (\`com.anywall.converter\`), conversor universal **100% offline** para Android.
+          Versión release compilada, firmada y auditada automáticamente de **AnyWall: Universal Converter** (\`com.anywall.converter\`), conversor universal **100% offline** para Android desarrollado por **SynthesizerEnd**.
 
-          ### Características incluidas
+          ### Novedades y Características (${TAG})
           - **Estrictamente 100% Offline:** 0 permisos de red en el APK final (sin \`INTERNET\` ni \`ACCESS_NETWORK_STATE\`, auditado automáticamente en CI con \`aapt2 dump permissions\`).
-          - **Imágenes y PDF básico:** Conversión bidireccional \`JPG\`, \`PNG\`, \`WEBP\`, \`BMP\` (codificador nativo 24-bit), renderizado \`SVG\`, imágenes a \`PDF\` único y extracción de páginas PDF a imágenes.
-          - **Documentos y PDF avanzado:** Unión de múltiples PDFs, división/extracción por rangos, compresión/optimización y conversión local de \`DOCX\`, \`HTML\`, \`TXT\` y \`MD\` a \`PDF\` mediante Mammoth + WebView offscreen.
-          - **Audio y Video offline:** Conversión de video (\`MP4\`, \`MKV\`, \`MOV\`, \`WEBM\`) con selector de resolución (\`Original\`, \`1080p\`, \`720p\`, \`480p\`) y extracción/conversión de audio (\`MP3\`, \`AAC\`, \`M4A\`, \`WAV\`) con Media3 Transformer y codificador LAME puro.
-          - **Archivos comprimidos:** Empaquetado en \`ZIP\`, \`TAR\`, \`TAR.GZ\` y extracción de \`ZIP\`, \`TAR\`, \`TAR.GZ\`, \`GZ\` y \`7Z\`.
-          - **Integración nativa:** Android Share Sheet (\`ACTION_SEND\` / \`ACTION_SEND_MULTIPLE\`), procesamiento en segundo plano con WorkManager y notificación de progreso real, guardado en \`Downloads/AnyWall/\` e historial persistente en Room.
+          - **Modificador Visual de PDF en Vista Previa:** Previsualización en cuadrícula de todas las páginas de los PDFs cargados con zoom a pantalla completa, rotación individual por página (+90°), reordenamiento libre (\`←\` / \`→\`) y exclusión/inclusión selectiva de páginas.
+          - **Soporte Avanzado Multi-Archivo y Carpetas:** Importación recursiva de carpetas completas (\`OpenDocumentTree\`), ordenamiento rápido del lote por Nombre (A–Z), Tamaño o Invertir orden, reordenamiento individual (↑/↓), fusión de lotes mixtos (Imágenes + Documentos/PDF en un único PDF) y multiselección en Historial (\`ACTION_SEND_MULTIPLE\`).
+          - **Productividad, Créditos y UX v0.2:** Miniaturas locales (imágenes, portadas PDF y fotogramas de video), comparativa de ahorro de peso (\`Antes → Después, -%\`), Ajustes locales con selector de tema y gestor de caché, y diálogo de **Créditos y Licencias Open Source** atribuyendo a **SynthesizerEnd** y los 9 repositorios integrados.
+          - **Imágenes y PDF avanzado:** Conversión entre \`JPG\`, \`PNG\`, \`WEBP\`, \`BMP\` (24-bit), soporte de entrada \`HEIC/HEIF\`, \`GIF\` y \`SVG\`, rotación, limpieza EXIF/GPS, protección y desbloqueo de PDF con contraseña (\`StandardProtectionPolicy\`), y tamaño/orientación (\`A4\`/\`Carta\`, \`Vertical\`/\`Horizontal\`) para \`DOCX\`, \`HTML\`, \`TXT\` y \`MD\` a \`PDF\`.
+          - **Audio, Video y Archivos Comprimidos:** Conversión de video (\`MP4\`, \`MKV\`, \`MOV\`, \`WEBM\`) con resolución, **silenciado de audio** y **recorte de tiempo (Trim inicio–fin)**, extracción/conversión de audio (\`MP3\`, \`AAC\`, \`M4A\`, \`WAV\`), y empaquetado/extracción de \`ZIP\`, \`TAR\`, \`TAR.GZ\`, **\`TAR.XZ\`**, **\`TAR.BZ2\`**, \`GZ\`, **\`XZ\`**, **\`BZ2\`** y \`7Z\`.
 
           ### Descarga e integridad
           - **Archivo:** \`${APK_NAME}\` (${SIZE_HR}, firmado con APK Signature Scheme v2)

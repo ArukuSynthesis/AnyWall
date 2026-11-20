@@ -2,8 +2,10 @@ package com.anywall.converter.data.engines
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.Matrix
 import android.graphics.Rect
 import android.graphics.pdf.PdfRenderer
 import android.os.ParcelFileDescriptor
@@ -15,7 +17,9 @@ import com.anywall.converter.domain.model.ConversionOptions
 import com.anywall.converter.domain.model.FormatCategory
 import com.anywall.converter.domain.model.InputFileItem
 import com.anywall.converter.domain.model.PdfActionMode
+import com.anywall.converter.domain.model.PdfPageEditItem
 import com.anywall.converter.domain.model.SupportedFormat
+import com.caverock.androidsvg.SVG
 import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
 import com.tom_roush.pdfbox.cos.COSName
 import com.tom_roush.pdfbox.io.MemoryUsageSetting
@@ -25,6 +29,8 @@ import com.tom_roush.pdfbox.pdmodel.PDDocument
 import com.tom_roush.pdfbox.pdmodel.PDPage
 import com.tom_roush.pdfbox.pdmodel.PDPageContentStream
 import com.tom_roush.pdfbox.pdmodel.common.PDRectangle
+import com.tom_roush.pdfbox.pdmodel.encryption.AccessPermission
+import com.tom_roush.pdfbox.pdmodel.encryption.StandardProtectionPolicy
 import com.tom_roush.pdfbox.pdmodel.graphics.image.JPEGFactory
 import com.tom_roush.pdfbox.pdmodel.graphics.image.PDImageXObject
 import com.tom_roush.pdfbox.text.PDFTextStripper
@@ -36,16 +42,19 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.IOException
 import kotlin.coroutines.coroutineContext
+import kotlin.math.max
 import kotlin.math.roundToInt
 
 /**
- * Motor 2: `DocumentEngineImpl` (Documentos y PDF Avanzado)
+ * Motor 2: `DocumentEngineImpl` (Documentos y PDF Avanzado - v0.2)
  * - Inicializa `PDFBoxResourceLoader.init(context)` antes de operar con PDFBox.
- * - Unión de múltiples archivos PDF en uno solo (`PDFMergerUtility`).
+ * - Ejecución del Modificador Visual de PDF en Vista Previa (`PdfPageEditItem`): reordenamiento libre de páginas
+ *   entre uno o múltiples PDFs, rotación individual por página (`0°`, `90°`, `180°`, `270°`) y exclusión de páginas.
+ * - Unión de múltiples archivos PDF (e incluso lotes mixtos de Imágenes + Documentos/PDF) en uno solo.
  * - Extracción/división de rango de páginas (`Splitter` / selección de páginas).
  * - Optimización/compresión de PDF ajustada por porcentaje de calidad (10% - 100%).
- * - Conversión de `DOCX` a `PDF` (vía `org.zwobble.mammoth.DocumentConverter` -> HTML -> `WebView` offscreen + `PrintDocumentAdapter`).
- * - Conversión de `.html`, `.txt` y `.md` a `PDF`, `HTML` o `TXT` de forma 100% local.
+ * - Protección de PDF con contraseña (`StandardProtectionPolicy`) y desbloqueo de PDF (`isAllSecurityToBeRemoved`).
+ * - Conversión de `DOCX`, `.html`, `.txt` y `.md` a `PDF`, `HTML` o `TXT` de forma 100% local.
  */
 class DocumentEngineImpl(
     private val context: Context,
@@ -73,7 +82,7 @@ class DocumentEngineImpl(
     }
 
     override fun canHandle(format: SupportedFormat): Boolean {
-        return format in documentFormats
+        return format in documentFormats || format.category == FormatCategory.IMAGE
     }
 
     override fun getSupportedTargetFormats(sourceFormats: List<SupportedFormat>): List<SupportedFormat> {
@@ -84,7 +93,6 @@ class DocumentEngineImpl(
             return emptyList()
         }
 
-        // Todos los documentos (PDF, DOCX, HTML, TXT, MD) pueden convertirse a PDF, HTML o TXT
         return listOf(
             SupportedFormat.PDF,
             SupportedFormat.TXT,
@@ -101,12 +109,20 @@ class DocumentEngineImpl(
         require(inputs.isNotEmpty()) { "No se seleccionaron documentos para convertir." }
         ensurePdfBoxInitialized()
 
+        // Caso 0: Si el usuario aplicó cambios en el Modificador Visual de PDF en Vista Previa
+        if (targetFormat == SupportedFormat.PDF &&
+            options.hasVisualPdfEdits &&
+            inputs.all { it.format == SupportedFormat.PDF }
+        ) {
+            return@withContext applyVisualPdfPageEdits(inputs, options, onProgress)
+        }
+
         // Caso 1: Todos los archivos de entrada son PDF y el destino es PDF
         if (inputs.all { it.format == SupportedFormat.PDF } && targetFormat == SupportedFormat.PDF) {
             return@withContext processPdfToPdfOperations(inputs, options, onProgress)
         }
 
-        // Caso 2: Destino es PDF y hay archivos DOCX, HTML, TXT, MD (o mezcla con PDF)
+        // Caso 2: Destino es PDF y hay archivos DOCX, HTML, TXT, MD o lotes mixtos con Imágenes/PDF
         if (targetFormat == SupportedFormat.PDF) {
             return@withContext convertDocumentsToPdf(inputs, options, onProgress)
         }
@@ -122,12 +138,142 @@ class DocumentEngineImpl(
     }
 
     /**
-     * Operaciones avanzadas sobre archivos PDF:
-     * 1. Unión de múltiples PDFs con `PDFMergerUtility`.
-     * 2. División de todas las páginas (`PdfActionMode.SPLIT_ALL_PAGES`) con `Splitter`.
-     * 3. Extracción de rango de páginas (`PdfActionMode.SPLIT_RANGE` o `options.pageRangeSpec.isNotBlank()`).
-     * 4. Optimización y compresión de PDF (`PdfActionMode.OPTIMIZE_COMPRESS` o PDF único).
+     * Aplica las modificaciones configuradas en el Editor Visual de Páginas PDF:
+     * reordenamiento de páginas (incluso entre varios PDFs), rotación individual por página
+     * y exclusión de páginas desmarcadas.
      */
+    private suspend fun applyVisualPdfPageEdits(
+        inputs: List<InputFileItem>,
+        options: ConversionOptions,
+        onProgress: (Float, String) -> Unit
+    ): List<ConversionJobResult> {
+        val allEdits = PdfPageEditItem.fromJsonArrayString(options.pdfVisualPageEditsJson)
+        val activeEdits = allEdits.filter { it.included }
+        require(activeEdits.isNotEmpty()) {
+            "Debes mantener al menos 1 página seleccionada en el Editor Visual de PDF."
+        }
+
+        val inputByUri = inputs.associateBy { it.uri.toString() }
+        val loadedDocs = linkedMapOf<String, Pair<File, PDDocument>>()
+        val tempOut = uriResolver.createTempWorkingFile(prefix = "pdf_visual_edit_", extension = "pdf")
+
+        try {
+            onProgress(0.08f, "Cargando documentos PDF de origen…")
+            for (edit in activeEdits) {
+                if (!loadedDocs.containsKey(edit.sourceUriString)) {
+                    val inputItem = inputByUri[edit.sourceUriString] ?: inputs.first()
+                    val tempSrc = uriResolver.copyUriToTempFile(
+                        uri = inputItem.uri,
+                        prefix = "vis_src_",
+                        extension = "pdf"
+                    )
+                    val doc = if (options.pdfPassword.isNotBlank()) {
+                        try {
+                            PDDocument.load(tempSrc, options.pdfPassword)
+                        } catch (_: Throwable) {
+                            PDDocument.load(tempSrc)
+                        }
+                    } else {
+                        PDDocument.load(tempSrc)
+                    }
+                    loadedDocs[edit.sourceUriString] = tempSrc to doc
+                }
+            }
+
+            PDDocument().use { targetDoc ->
+                targetDoc.documentInformation.producer = "AnyWall Universal Converter v0.2"
+                val totalActive = activeEdits.size
+                activeEdits.forEachIndexed { idx, edit ->
+                    coroutineContext.ensureActive()
+                    val p = 0.1f + (idx.toFloat() / totalActive.toFloat()) * 0.72f
+                    onProgress(
+                        p,
+                        "Aplicando página ${idx + 1} de $totalActive (Pág. ${edit.displayPageNumber} de ${edit.sourceDisplayName})"
+                    )
+
+                    val sourceDoc = loadedDocs[edit.sourceUriString]?.second
+                        ?: throw IOException("No se pudo acceder al PDF de origen: ${edit.sourceDisplayName}")
+
+                    if (edit.originalPageIndex in 0 until sourceDoc.numberOfPages) {
+                        val importedPage = targetDoc.importPage(sourceDoc.getPage(edit.originalPageIndex))
+                        if (edit.normalizedRotation != 0) {
+                            val currentRot = importedPage.rotation
+                            importedPage.rotation = (currentRot + edit.normalizedRotation) % 360
+                        }
+                    }
+                }
+
+                onProgress(0.86f, "Guardando documento PDF modificado…")
+                targetDoc.save(tempOut)
+            }
+
+            val finalTempFile = if (options.clampedQuality < 95) {
+                onProgress(0.91f, "Optimizando peso del PDF modificado (${options.clampedQuality}%)…")
+                val compressedTemp = uriResolver.createTempWorkingFile(prefix = "vis_opt_", extension = "pdf")
+                compressPdfFile(tempOut, compressedTemp, options.clampedQuality)
+                if (compressedTemp.exists() && compressedTemp.length() in 1 until tempOut.length()) {
+                    tempOut.delete()
+                    compressedTemp
+                } else {
+                    compressedTemp.delete()
+                    tempOut
+                }
+            } else {
+                tempOut
+            }
+
+            encryptPdfInPlaceIfRequested(finalTempFile, options)
+
+            val baseName = when {
+                options.customOutputBaseName.isNotBlank() -> options.customOutputBaseName
+                inputs.size == 1 -> "${inputs.first().baseNameWithoutExtension}_editado"
+                else -> "${inputs.first().baseNameWithoutExtension}_editado_${activeEdits.size}_pags"
+            }
+            val desiredName = UriFileResolver.buildOutputFileName(baseName, "pdf")
+            val saved = try {
+                storageManager.saveTempFileToDownloads(
+                    sourceFile = finalTempFile,
+                    desiredDisplayName = desiredName,
+                    mimeType = SupportedFormat.PDF.mimeType
+                )
+            } finally {
+                finalTempFile.delete()
+            }
+
+            val totalSourceBytes = inputs.sumOf { it.sizeBytes }
+            onProgress(1f, "PDF editado guardado: ${saved.displayName}")
+            val sourceLabel = if (inputs.size == 1) {
+                "${inputs.first().displayName} (${activeEdits.size} págs.)"
+            } else {
+                "${inputs.first().displayName} (+${inputs.size - 1} PDFs • ${activeEdits.size} págs.)"
+            }
+
+            return listOf(
+                ConversionJobResult(
+                    sourceDisplayName = sourceLabel,
+                    sourceFormat = SupportedFormat.PDF,
+                    sourceSizeBytes = totalSourceBytes,
+                    outputDisplayName = saved.displayName,
+                    outputFormat = SupportedFormat.PDF,
+                    outputCategory = FormatCategory.DOCUMENT,
+                    outputUri = saved.uri,
+                    outputAbsolutePath = saved.absolutePath,
+                    outputSizeBytes = saved.sizeBytes,
+                    outputMimeType = saved.mimeType
+                )
+            )
+        } finally {
+            loadedDocs.values.forEach { (file, doc) ->
+                try {
+                    doc.close()
+                } catch (_: Throwable) {
+                }
+                file.delete()
+            }
+            if (tempOut.exists()) tempOut.delete()
+        }
+    }
+
     private suspend fun processPdfToPdfOperations(
         inputs: List<InputFileItem>,
         options: ConversionOptions,
@@ -151,6 +297,151 @@ class DocumentEngineImpl(
             PdfActionMode.SPLIT_RANGE -> extractPageRangeFromPdfs(inputs, options, onProgress)
             PdfActionMode.SPLIT_ALL_PAGES -> splitAllPagesFromPdfs(inputs, options, onProgress)
             PdfActionMode.OPTIMIZE_COMPRESS -> optimizeAndCompressPdfFiles(inputs, options, onProgress)
+            PdfActionMode.PROTECT_PASSWORD -> protectPdfFilesWithPassword(inputs, options, onProgress)
+            PdfActionMode.UNLOCK_PASSWORD -> unlockPdfFilesWithPassword(inputs, options, onProgress)
+        }
+    }
+
+    private suspend fun protectPdfFilesWithPassword(
+        inputs: List<InputFileItem>,
+        options: ConversionOptions,
+        onProgress: (Float, String) -> Unit
+    ): List<ConversionJobResult> {
+        val password = options.pdfPassword.trim()
+        require(password.isNotEmpty()) {
+            "Debes especificar una contraseña en los parámetros de conversión para proteger el PDF."
+        }
+
+        val results = mutableListOf<ConversionJobResult>()
+        val total = inputs.size
+
+        inputs.forEachIndexed { index, item ->
+            coroutineContext.ensureActive()
+            onProgress(
+                index.toFloat() / total.toFloat(),
+                "Cifrando con contraseña ${item.displayName}…"
+            )
+
+            val tempSrc = uriResolver.copyUriToTempFile(item.uri, prefix = "enc_src_", extension = "pdf")
+            val tempOut = uriResolver.createTempWorkingFile(prefix = "enc_out_", extension = "pdf")
+
+            try {
+                PDDocument.load(tempSrc).use { doc ->
+                    val accessPermission = AccessPermission()
+                    val policy = StandardProtectionPolicy(password, password, accessPermission).apply {
+                        encryptionKeyLength = 128
+                        permissions = accessPermission
+                    }
+                    doc.protect(policy)
+                    doc.save(tempOut)
+                }
+
+                val baseName = if (options.customOutputBaseName.isNotBlank() && total == 1) {
+                    options.customOutputBaseName
+                } else {
+                    "${item.baseNameWithoutExtension}_protegido"
+                }
+                val desiredName = UriFileResolver.buildOutputFileName(baseName, "pdf")
+                val saved = storageManager.saveTempFileToDownloads(
+                    sourceFile = tempOut,
+                    desiredDisplayName = desiredName,
+                    mimeType = SupportedFormat.PDF.mimeType
+                )
+                results.add(
+                    ConversionJobResult(
+                        sourceDisplayName = item.displayName,
+                        sourceFormat = SupportedFormat.PDF,
+                        sourceSizeBytes = item.sizeBytes,
+                        outputDisplayName = saved.displayName,
+                        outputFormat = SupportedFormat.PDF,
+                        outputCategory = FormatCategory.DOCUMENT,
+                        outputUri = saved.uri,
+                        outputAbsolutePath = saved.absolutePath,
+                        outputSizeBytes = saved.sizeBytes,
+                        outputMimeType = saved.mimeType
+                    )
+                )
+            } finally {
+                tempSrc.delete()
+                tempOut.delete()
+            }
+        }
+
+        onProgress(1f, "Protección de PDF completada.")
+        return results
+    }
+
+    private suspend fun unlockPdfFilesWithPassword(
+        inputs: List<InputFileItem>,
+        options: ConversionOptions,
+        onProgress: (Float, String) -> Unit
+    ): List<ConversionJobResult> {
+        val password = options.pdfPassword.trim()
+        val results = mutableListOf<ConversionJobResult>()
+        val total = inputs.size
+
+        inputs.forEachIndexed { index, item ->
+            coroutineContext.ensureActive()
+            onProgress(
+                index.toFloat() / total.toFloat(),
+                "Desbloqueando ${item.displayName}…"
+            )
+
+            val tempSrc = uriResolver.copyUriToTempFile(item.uri, prefix = "unlk_src_", extension = "pdf")
+            val tempOut = uriResolver.createTempWorkingFile(prefix = "unlk_out_", extension = "pdf")
+
+            try {
+                PDDocument.load(tempSrc, password).use { doc ->
+                    doc.isAllSecurityToBeRemoved = true
+                    doc.save(tempOut)
+                }
+
+                val baseName = if (options.customOutputBaseName.isNotBlank() && total == 1) {
+                    options.customOutputBaseName
+                } else {
+                    "${item.baseNameWithoutExtension}_desbloqueado"
+                }
+                val desiredName = UriFileResolver.buildOutputFileName(baseName, "pdf")
+                val saved = storageManager.saveTempFileToDownloads(
+                    sourceFile = tempOut,
+                    desiredDisplayName = desiredName,
+                    mimeType = SupportedFormat.PDF.mimeType
+                )
+                results.add(
+                    ConversionJobResult(
+                        sourceDisplayName = item.displayName,
+                        sourceFormat = SupportedFormat.PDF,
+                        sourceSizeBytes = item.sizeBytes,
+                        outputDisplayName = saved.displayName,
+                        outputFormat = SupportedFormat.PDF,
+                        outputCategory = FormatCategory.DOCUMENT,
+                        outputUri = saved.uri,
+                        outputAbsolutePath = saved.absolutePath,
+                        outputSizeBytes = saved.sizeBytes,
+                        outputMimeType = saved.mimeType
+                    )
+                )
+            } finally {
+                tempSrc.delete()
+                tempOut.delete()
+            }
+        }
+
+        onProgress(1f, "Desbloqueo de PDF completado.")
+        return results
+    }
+
+    private fun encryptPdfInPlaceIfRequested(pdfFile: File, options: ConversionOptions) {
+        val pass = options.pdfPassword.trim()
+        if (pass.isEmpty() || options.pdfActionMode == PdfActionMode.UNLOCK_PASSWORD) return
+        PDDocument.load(pdfFile).use { doc ->
+            val accessPermission = AccessPermission()
+            val policy = StandardProtectionPolicy(pass, pass, accessPermission).apply {
+                encryptionKeyLength = 128
+                permissions = accessPermission
+            }
+            doc.protect(policy)
+            doc.save(pdfFile)
         }
     }
 
@@ -177,7 +468,6 @@ class DocumentEngineImpl(
             merger.destinationFileName = mergedTempOut.absolutePath
             merger.mergeDocuments(MemoryUsageSetting.setupMixed(32L * 1024L * 1024L))
 
-            // Si el usuario seleccionó una calidad < 95%, optimizamos también el PDF unido
             val finalTempFile = if (options.clampedQuality < 95) {
                 onProgress(0.82f, "Optimizando PDF unido al ${options.clampedQuality}%…")
                 val compressedTemp = uriResolver.createTempWorkingFile(prefix = "pdf_merged_opt_", extension = "pdf")
@@ -193,6 +483,8 @@ class DocumentEngineImpl(
                 mergedTempOut
             }
 
+            encryptPdfInPlaceIfRequested(finalTempFile, options)
+
             val baseName = options.customOutputBaseName.ifBlank {
                 "${inputs.first().baseNameWithoutExtension}_unido_${inputs.size}"
             }
@@ -207,11 +499,13 @@ class DocumentEngineImpl(
                 finalTempFile.delete()
             }
 
+            val totalSourceBytes = inputs.sumOf { it.sizeBytes }
             onProgress(1f, "PDF unido guardado: ${saved.displayName}")
             return listOf(
                 ConversionJobResult(
                     sourceDisplayName = "${inputs.first().displayName} (+${inputs.size - 1} PDFs)",
                     sourceFormat = SupportedFormat.PDF,
+                    sourceSizeBytes = totalSourceBytes,
                     outputDisplayName = saved.displayName,
                     outputFormat = SupportedFormat.PDF,
                     outputCategory = FormatCategory.DOCUMENT,
@@ -246,7 +540,7 @@ class DocumentEngineImpl(
             val tempOut = uriResolver.createTempWorkingFile(prefix = "range_out_", extension = "pdf")
 
             try {
-                PDDocument.load(tempSrc).use { sourceDoc ->
+                PDDocument.load(tempSrc, options.pdfPassword).use { sourceDoc ->
                     val totalPages = sourceDoc.numberOfPages
                     if (totalPages <= 0) {
                         throw IOException("El PDF '${item.displayName}' no contiene páginas.")
@@ -279,6 +573,7 @@ class DocumentEngineImpl(
                     ConversionJobResult(
                         sourceDisplayName = item.displayName,
                         sourceFormat = SupportedFormat.PDF,
+                        sourceSizeBytes = item.sizeBytes,
                         outputDisplayName = saved.displayName,
                         outputFormat = SupportedFormat.PDF,
                         outputCategory = FormatCategory.DOCUMENT,
@@ -310,14 +605,15 @@ class DocumentEngineImpl(
             coroutineContext.ensureActive()
             val tempSrc = uriResolver.copyUriToTempFile(item.uri, prefix = "split_src_", extension = "pdf")
             try {
-                PDDocument.load(tempSrc).use { sourceDoc ->
+                PDDocument.load(tempSrc, options.pdfPassword).use { sourceDoc ->
                     val splitter = Splitter()
                     val splitDocs: List<PDDocument> = splitter.split(sourceDoc)
                     try {
-                        val pageCount = splitDocs.size
+                        val pageCount = splitDocs.size.coerceAtLeast(1)
+                        val approxSourcePerPage = (item.sizeBytes / pageCount).coerceAtLeast(1L)
                         splitDocs.forEachIndexed { pageIdx, singlePageDoc ->
                             coroutineContext.ensureActive()
-                            val progress = (fileIdx.toFloat() + (pageIdx.toFloat() / pageCount.coerceAtLeast(1))) / totalFiles
+                            val progress = (fileIdx.toFloat() + (pageIdx.toFloat() / pageCount)) / totalFiles
                             onProgress(
                                 progress.coerceIn(0f, 0.99f),
                                 "Dividiendo página ${pageIdx + 1} de $pageCount (${item.displayName})"
@@ -349,6 +645,7 @@ class DocumentEngineImpl(
                                     ConversionJobResult(
                                         sourceDisplayName = "${item.displayName} (Pág. ${pageIdx + 1})",
                                         sourceFormat = SupportedFormat.PDF,
+                                        sourceSizeBytes = approxSourcePerPage,
                                         outputDisplayName = saved.displayName,
                                         outputFormat = SupportedFormat.PDF,
                                         outputCategory = FormatCategory.DOCUMENT,
@@ -398,6 +695,7 @@ class DocumentEngineImpl(
 
             try {
                 compressPdfFile(tempSrc, tempOut, options.clampedQuality)
+                encryptPdfInPlaceIfRequested(tempOut, options)
 
                 val baseName = if (options.customOutputBaseName.isNotBlank() && total == 1) {
                     options.customOutputBaseName
@@ -414,6 +712,7 @@ class DocumentEngineImpl(
                     ConversionJobResult(
                         sourceDisplayName = item.displayName,
                         sourceFormat = SupportedFormat.PDF,
+                        sourceSizeBytes = item.sizeBytes,
                         outputDisplayName = saved.displayName,
                         outputFormat = SupportedFormat.PDF,
                         outputCategory = FormatCategory.DOCUMENT,
@@ -433,14 +732,9 @@ class DocumentEngineImpl(
         return results
     }
 
-    /**
-     * Comprime un archivo PDF recomprimiendo los objetos de imagen (`PDImageXObject`) incrustados
-     * y/o rasterizando las páginas con `PdfRenderer` + `JPEGFactory` según la calidad solicitada.
-     */
     private fun compressPdfFile(sourceFile: File, destFile: File, qualityPercent: Int) {
         val qualityFloat = (qualityPercent.coerceIn(10, 100) / 100f)
 
-        // Estrategia 1: Recomprimir imágenes incrustadas en el árbol de recursos de PDFBox preservando texto vectorial
         val tempVectorCompressed = uriResolver.createTempWorkingFile(prefix = "vec_opt_", extension = "pdf")
         var vectorSuccess = false
         try {
@@ -481,7 +775,6 @@ class DocumentEngineImpl(
             vectorSuccess = false
         }
 
-        // Estrategia 2: Si la calidad es < 85% o la estrategia 1 no redujo tamaño, probamos rasterización controlada
         val tempRasterCompressed = uriResolver.createTempWorkingFile(prefix = "ras_opt_", extension = "pdf")
         var rasterSuccess = false
         if (qualityPercent < 90 || !vectorSuccess) {
@@ -555,9 +848,8 @@ class DocumentEngineImpl(
     }
 
     /**
-     * Convierte archivos `DOCX`, `HTML`, `TXT`, `MD` (e incluso si están combinados con `PDF`) a `PDF`.
-     * - `DOCX` -> HTML con `org.zwobble.mammoth.DocumentConverter` -> `WebView` offscreen + `PrintDocumentAdapter`.
-     * - `MD` / `TXT` / `HTML` -> HTML estilizado -> `WebView` offscreen + `PrintDocumentAdapter`.
+     * Convierte documentos (`DOCX`, `HTML`, `TXT`, `MD`) o lotes mixtos con imágenes y PDFs
+     * en un único documento PDF continuo (o PDFs individuales si `mergeIntoSinglePdf == false`).
      */
     private suspend fun convertDocumentsToPdf(
         inputs: List<InputFileItem>,
@@ -574,34 +866,43 @@ class DocumentEngineImpl(
                 val progress = (index.toFloat() / total.toFloat()) * (if (shouldMergeAll) 0.8f else 0.95f)
                 onProgress(
                     progress,
-                    "Convirtiendo documento ${index + 1} de $total a PDF: ${item.displayName}"
+                    "Convirtiendo archivo ${index + 1} de $total a PDF: ${item.displayName}"
                 )
 
-                val tempPdf = if (item.format == SupportedFormat.PDF) {
-                    uriResolver.copyUriToTempFile(item.uri, prefix = "doc_existing_", extension = "pdf")
-                } else {
-                    val html = convertDocumentItemToHtml(item)
-                    val outTempPdf = uriResolver.createTempWorkingFile(
-                        prefix = "webview_pdf_",
-                        extension = "pdf"
-                    )
-                    webViewPdfGenerator.renderHtmlToPdfFile(
-                        htmlContent = html,
-                        documentTitle = item.baseNameWithoutExtension,
-                        outputFile = outTempPdf
-                    )
+                val tempPdf = when {
+                    item.format == SupportedFormat.PDF -> {
+                        uriResolver.copyUriToTempFile(item.uri, prefix = "doc_existing_", extension = "pdf")
+                    }
+                    item.format.category == FormatCategory.IMAGE -> {
+                        convertSingleImageItemToTempPdf(item, options)
+                    }
+                    else -> {
+                        val html = convertDocumentItemToHtml(item)
+                        val outTempPdf = uriResolver.createTempWorkingFile(
+                            prefix = "webview_pdf_",
+                            extension = "pdf"
+                        )
+                        webViewPdfGenerator.renderHtmlToPdfFile(
+                            htmlContent = html,
+                            documentTitle = item.baseNameWithoutExtension,
+                            outputFile = outTempPdf,
+                            pageSize = options.pdfPageSize,
+                            pageOrientation = options.pdfPageOrientation
+                        )
+                    }
                 }
                 generatedTempPdfs.add(item to tempPdf)
             }
 
             if (shouldMergeAll) {
-                onProgress(0.85f, "Uniendo ${generatedTempPdfs.size} documentos en un único PDF…")
+                onProgress(0.85f, "Uniendo ${generatedTempPdfs.size} elementos en un único PDF…")
                 val mergedPdf = uriResolver.createTempWorkingFile(prefix = "merged_docs_", extension = "pdf")
                 try {
                     val merger = PDFMergerUtility()
                     generatedTempPdfs.forEach { (_, file) -> merger.addSource(file) }
                     merger.destinationFileName = mergedPdf.absolutePath
                     merger.mergeDocuments(MemoryUsageSetting.setupMixed(32L * 1024L * 1024L))
+                    encryptPdfInPlaceIfRequested(mergedPdf, options)
 
                     val baseName = options.customOutputBaseName.ifBlank {
                         "${inputs.first().baseNameWithoutExtension}_unido_${inputs.size}"
@@ -613,11 +914,13 @@ class DocumentEngineImpl(
                         mimeType = SupportedFormat.PDF.mimeType
                     )
 
+                    val totalSourceBytes = inputs.sumOf { it.sizeBytes }
                     onProgress(1f, "PDF combinado generado: ${saved.displayName}")
                     return listOf(
                         ConversionJobResult(
                             sourceDisplayName = "${inputs.first().displayName} (+${inputs.size - 1} más)",
                             sourceFormat = inputs.first().format,
+                            sourceSizeBytes = totalSourceBytes,
                             outputDisplayName = saved.displayName,
                             outputFormat = SupportedFormat.PDF,
                             outputCategory = FormatCategory.DOCUMENT,
@@ -633,6 +936,7 @@ class DocumentEngineImpl(
             } else {
                 val results = mutableListOf<ConversionJobResult>()
                 generatedTempPdfs.forEachIndexed { idx, (item, pdfFile) ->
+                    encryptPdfInPlaceIfRequested(pdfFile, options)
                     val baseName = if (options.customOutputBaseName.isNotBlank()) {
                         if (total == 1) options.customOutputBaseName
                         else "${options.customOutputBaseName}_${idx + 1}"
@@ -649,6 +953,7 @@ class DocumentEngineImpl(
                         ConversionJobResult(
                             sourceDisplayName = item.displayName,
                             sourceFormat = item.format,
+                            sourceSizeBytes = item.sizeBytes,
                             outputDisplayName = saved.displayName,
                             outputFormat = SupportedFormat.PDF,
                             outputCategory = FormatCategory.DOCUMENT,
@@ -668,8 +973,71 @@ class DocumentEngineImpl(
     }
 
     /**
-     * Convierte cualquier documento de entrada (`DOCX`, `HTML`, `TXT`, `MD`, `PDF`) a HTML o TXT.
+     * Convierte una imagen individual dentro de un lote mixto (Imágenes + Documentos/PDF)
+     * a un archivo PDF temporal de 1 página para integrarlo con `PDFMergerUtility`.
      */
+    private fun convertSingleImageItemToTempPdf(
+        item: InputFileItem,
+        options: ConversionOptions
+    ): File {
+        val tempPdf = uriResolver.createTempWorkingFile(prefix = "mix_img_", extension = "pdf")
+        val rawBitmap = if (item.format == SupportedFormat.SVG) {
+            val svg = uriResolver.openInputStream(item.uri).use { SVG.getFromInputStream(it) }
+            val w = (svg.documentWidth.takeIf { it > 0f } ?: 1080f).roundToInt().coerceIn(64, 2480)
+            val h = (svg.documentHeight.takeIf { it > 0f } ?: 1080f).roundToInt().coerceIn(64, 2480)
+            val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+            val canvas = Canvas(bmp)
+            canvas.drawColor(Color.WHITE)
+            svg.renderToCanvas(canvas)
+            bmp
+        } else {
+            val bytes = uriResolver.openInputStream(item.uri).use { it.readBytes() }
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                ?: throw IOException("No se pudo decodificar la imagen '${item.displayName}' en el lote mixto.")
+        }
+
+        val maxDim = options.maxDimensionPx ?: 2048
+        val currentMax = max(rawBitmap.width, rawBitmap.height).coerceAtLeast(1)
+        val scaled = if (currentMax > maxDim) {
+            val ratio = maxDim.toFloat() / currentMax.toFloat()
+            val newW = (rawBitmap.width * ratio).roundToInt().coerceAtLeast(1)
+            val newH = (rawBitmap.height * ratio).roundToInt().coerceAtLeast(1)
+            Bitmap.createScaledBitmap(rawBitmap, newW, newH, true).also {
+                if (it !== rawBitmap) rawBitmap.recycle()
+            }
+        } else {
+            rawBitmap
+        }
+
+        val rotated = if (options.normalizedRotationDegrees != 0) {
+            val matrix = Matrix().apply { postRotate(options.normalizedRotationDegrees.toFloat()) }
+            Bitmap.createBitmap(scaled, 0, 0, scaled.width, scaled.height, matrix, true).also {
+                if (it !== scaled) scaled.recycle()
+            }
+        } else {
+            scaled
+        }
+
+        try {
+            PDDocument().use { doc ->
+                val page = PDPage(PDRectangle(rotated.width.toFloat(), rotated.height.toFloat()))
+                doc.addPage(page)
+                val pdImage = JPEGFactory.createFromImage(
+                    doc,
+                    rotated,
+                    (options.clampedQuality / 100f).coerceIn(0.15f, 1.0f)
+                )
+                PDPageContentStream(doc, page).use { cs ->
+                    cs.drawImage(pdImage, 0f, 0f, rotated.width.toFloat(), rotated.height.toFloat())
+                }
+                doc.save(tempPdf)
+            }
+        } finally {
+            rotated.recycle()
+        }
+        return tempPdf
+    }
+
     private suspend fun convertDocumentsToTextOrHtml(
         inputs: List<InputFileItem>,
         targetFormat: SupportedFormat,
@@ -717,6 +1085,7 @@ class DocumentEngineImpl(
                     ConversionJobResult(
                         sourceDisplayName = item.displayName,
                         sourceFormat = item.format,
+                        sourceSizeBytes = item.sizeBytes,
                         outputDisplayName = saved.displayName,
                         outputFormat = targetFormat,
                         outputCategory = FormatCategory.DOCUMENT,
@@ -735,14 +1104,10 @@ class DocumentEngineImpl(
         return results
     }
 
-    /**
-     * Transforma un archivo `DOCX`, `HTML`, `TXT`, `MD` o `PDF` a una representación HTML limpia.
-     */
     @Throws(IOException::class)
     private fun convertDocumentItemToHtml(item: InputFileItem): String {
         return when (item.format) {
             SupportedFormat.DOCX -> {
-                // Mammoth DocumentConverter transforma .docx (incluyendo tablas, listas e imágenes embebidas en base64) a HTML
                 val tempDocx = uriResolver.copyUriToTempFile(item.uri, prefix = "mammoth_", extension = "docx")
                 try {
                     val converter = DocumentConverter()
@@ -852,152 +1217,146 @@ class DocumentEngineImpl(
         return sb.toString()
     }
 
-    /**
-     * Conversor completo de Markdown a HTML semántico (encabezados, bloques de código,
-     * listas ordenadas y no ordenadas, citas, separadores, tablas básicas, negritas, cursivas y código inline).
-     */
-    private fun convertMarkdownToHtml(markdown: String): String {
-        val lines = markdown.replace("\r\n", "\n").replace('\r', '\n').split('\n')
-        val html = StringBuilder(markdown.length * 2)
-        var inCodeBlock = false
-        var inUnorderedList = false
-        var inOrderedList = false
+    companion object {
+        fun convertMarkdownToHtml(markdown: String): String {
+            val lines = markdown.replace("\r\n", "\n").replace('\r', '\n').split('\n')
+            val html = StringBuilder(markdown.length * 2)
+            var inCodeBlock = false
+            var inUnorderedList = false
+            var inOrderedList = false
 
-        fun closeLists() {
-            if (inUnorderedList) {
-                html.append("</ul>\n")
-                inUnorderedList = false
-            }
-            if (inOrderedList) {
-                html.append("</ol>\n")
-                inOrderedList = false
-            }
-        }
-
-        for (rawLine in lines) {
-            val trimmed = rawLine.trim()
-
-            if (trimmed.startsWith("```")) {
-                closeLists()
-                if (!inCodeBlock) {
-                    html.append("<pre><code>")
-                    inCodeBlock = true
-                } else {
-                    html.append("</code></pre>\n")
-                    inCodeBlock = false
+            fun closeLists() {
+                if (inUnorderedList) {
+                    html.append("</ul>\n")
+                    inUnorderedList = false
                 }
-                continue
+                if (inOrderedList) {
+                    html.append("</ol>\n")
+                    inOrderedList = false
+                }
+            }
+
+            for (rawLine in lines) {
+                val trimmed = rawLine.trim()
+
+                if (trimmed.startsWith("```")) {
+                    closeLists()
+                    if (!inCodeBlock) {
+                        html.append("<pre><code>")
+                        inCodeBlock = true
+                    } else {
+                        html.append("</code></pre>\n")
+                        inCodeBlock = false
+                    }
+                    continue
+                }
+
+                if (inCodeBlock) {
+                    html.append(WebViewPdfGenerator.escapeHtml(rawLine)).append('\n')
+                    continue
+                }
+
+                if (trimmed.isEmpty()) {
+                    closeLists()
+                    continue
+                }
+
+                when {
+                    trimmed == "---" || trimmed == "***" || trimmed == "___" -> {
+                        closeLists()
+                        html.append("<hr/>\n")
+                    }
+                    trimmed.startsWith("###### ") -> {
+                        closeLists()
+                        html.append("<h6>").append(formatInlineMarkdown(trimmed.drop(7))).append("</h6>\n")
+                    }
+                    trimmed.startsWith("##### ") -> {
+                        closeLists()
+                        html.append("<h5>").append(formatInlineMarkdown(trimmed.drop(6))).append("</h5>\n")
+                    }
+                    trimmed.startsWith("#### ") -> {
+                        closeLists()
+                        html.append("<h4>").append(formatInlineMarkdown(trimmed.drop(5))).append("</h4>\n")
+                    }
+                    trimmed.startsWith("### ") -> {
+                        closeLists()
+                        html.append("<h3>").append(formatInlineMarkdown(trimmed.drop(4))).append("</h3>\n")
+                    }
+                    trimmed.startsWith("## ") -> {
+                        closeLists()
+                        html.append("<h2>").append(formatInlineMarkdown(trimmed.drop(3))).append("</h2>\n")
+                    }
+                    trimmed.startsWith("# ") -> {
+                        closeLists()
+                        html.append("<h1>").append(formatInlineMarkdown(trimmed.drop(2))).append("</h1>\n")
+                    }
+                    trimmed.startsWith("> ") || trimmed == ">" -> {
+                        closeLists()
+                        val quoteContent = trimmed.removePrefix(">").trim()
+                        html.append("<blockquote>").append(formatInlineMarkdown(quoteContent)).append("</blockquote>\n")
+                    }
+                    trimmed.startsWith("- ") || trimmed.startsWith("* ") || trimmed.startsWith("+ ") -> {
+                        if (inOrderedList) {
+                            html.append("</ol>\n")
+                            inOrderedList = false
+                        }
+                        if (!inUnorderedList) {
+                            html.append("<ul>\n")
+                            inUnorderedList = true
+                        }
+                        html.append("<li>").append(formatInlineMarkdown(trimmed.drop(2))).append("</li>\n")
+                    }
+                    trimmed.matches(Regex("^\\d+\\.\\s+.*")) -> {
+                        if (inUnorderedList) {
+                            html.append("</ul>\n")
+                            inUnorderedList = false
+                        }
+                        if (!inOrderedList) {
+                            html.append("<ol>\n")
+                            inOrderedList = true
+                        }
+                        val itemText = trimmed.substringAfter(". ").trim()
+                        html.append("<li>").append(formatInlineMarkdown(itemText)).append("</li>\n")
+                    }
+                    else -> {
+                        closeLists()
+                        html.append("<p>").append(formatInlineMarkdown(trimmed)).append("</p>\n")
+                    }
+                }
             }
 
             if (inCodeBlock) {
-                html.append(WebViewPdfGenerator.escapeHtml(rawLine)).append('\n')
-                continue
+                html.append("</code></pre>\n")
             }
-
-            if (trimmed.isEmpty()) {
-                closeLists()
-                continue
-            }
-
-            when {
-                trimmed == "---" || trimmed == "***" || trimmed == "___" -> {
-                    closeLists()
-                    html.append("<hr/>\n")
-                }
-                trimmed.startsWith("###### ") -> {
-                    closeLists()
-                    html.append("<h6>").append(formatInlineMarkdown(trimmed.drop(7))).append("</h6>\n")
-                }
-                trimmed.startsWith("##### ") -> {
-                    closeLists()
-                    html.append("<h5>").append(formatInlineMarkdown(trimmed.drop(6))).append("</h5>\n")
-                }
-                trimmed.startsWith("#### ") -> {
-                    closeLists()
-                    html.append("<h4>").append(formatInlineMarkdown(trimmed.drop(5))).append("</h4>\n")
-                }
-                trimmed.startsWith("### ") -> {
-                    closeLists()
-                    html.append("<h3>").append(formatInlineMarkdown(trimmed.drop(4))).append("</h3>\n")
-                }
-                trimmed.startsWith("## ") -> {
-                    closeLists()
-                    html.append("<h2>").append(formatInlineMarkdown(trimmed.drop(3))).append("</h2>\n")
-                }
-                trimmed.startsWith("# ") -> {
-                    closeLists()
-                    html.append("<h1>").append(formatInlineMarkdown(trimmed.drop(2))).append("</h1>\n")
-                }
-                trimmed.startsWith("> ") || trimmed == ">" -> {
-                    closeLists()
-                    val quoteContent = trimmed.removePrefix(">").trim()
-                    html.append("<blockquote>").append(formatInlineMarkdown(quoteContent)).append("</blockquote>\n")
-                }
-                trimmed.startsWith("- ") || trimmed.startsWith("* ") || trimmed.startsWith("+ ") -> {
-                    if (inOrderedList) {
-                        html.append("</ol>\n")
-                        inOrderedList = false
-                    }
-                    if (!inUnorderedList) {
-                        html.append("<ul>\n")
-                        inUnorderedList = true
-                    }
-                    html.append("<li>").append(formatInlineMarkdown(trimmed.drop(2))).append("</li>\n")
-                }
-                trimmed.matches(Regex("^\\d+\\.\\s+.*")) -> {
-                    if (inUnorderedList) {
-                        html.append("</ul>\n")
-                        inUnorderedList = false
-                    }
-                    if (!inOrderedList) {
-                        html.append("<ol>\n")
-                        inOrderedList = true
-                    }
-                    val itemText = trimmed.substringAfter(". ").trim()
-                    html.append("<li>").append(formatInlineMarkdown(itemText)).append("</li>\n")
-                }
-                else -> {
-                    closeLists()
-                    html.append("<p>").append(formatInlineMarkdown(trimmed)).append("</p>\n")
-                }
-            }
+            closeLists()
+            return html.toString()
         }
 
-        if (inCodeBlock) {
-            html.append("</code></pre>\n")
+        private fun formatInlineMarkdown(text: String): String {
+            var result = WebViewPdfGenerator.escapeHtml(text)
+            result = result.replace(Regex("`([^`]+)`"), "<code>$1</code>")
+            result = result.replace(Regex("\\*\\*([^*]+)\\*\\*"), "<strong>$1</strong>")
+            result = result.replace(Regex("__([^_]+)__"), "<strong>$1</strong>")
+            result = result.replace(Regex("\\*([^*]+)\\*"), "<em>$1</em>")
+            result = result.replace(Regex("_([^_]+)_"), "<em>$1</em>")
+            result = result.replace(Regex("\\[([^\\]]+)]\\(([^)]+)\\)"), "<strong>$1</strong> (<code>$2</code>)")
+            return result
         }
-        closeLists()
-        return html.toString()
-    }
 
-    private fun formatInlineMarkdown(text: String): String {
-        var result = WebViewPdfGenerator.escapeHtml(text)
-        // Código inline `code`
-        result = result.replace(Regex("`([^`]+)`"), "<code>$1</code>")
-        // Negrita **texto** o __texto__
-        result = result.replace(Regex("\\*\\*([^*]+)\\*\\*"), "<strong>$1</strong>")
-        result = result.replace(Regex("__([^_]+)__"), "<strong>$1</strong>")
-        // Cursiva *texto* o _texto_
-        result = result.replace(Regex("\\*([^*]+)\\*"), "<em>$1</em>")
-        result = result.replace(Regex("_([^_]+)_"), "<em>$1</em>")
-        // Enlaces [texto](url) -> texto (url) sin navegación remota
-        result = result.replace(Regex("\\[([^\\]]+)]\\(([^)]+)\\)"), "<strong>$1</strong> (<code>$2</code>)")
-        return result
-    }
-
-    private fun stripHtmlTags(html: String): String {
-        return html
-            .replace(Regex("<style[^>]*>[\\s\\S]*?</style>", RegexOption.IGNORE_CASE), "")
-            .replace(Regex("<script[^>]*>[\\s\\S]*?</script>", RegexOption.IGNORE_CASE), "")
-            .replace(Regex("<(br|p|div|h[1-6]|li|tr)[^>]*>", RegexOption.IGNORE_CASE), "\n")
-            .replace(Regex("<[^>]+>"), "")
-            .replace("&nbsp;", " ")
-            .replace("&amp;", "&")
-            .replace("&lt;", "<")
-            .replace("&gt;", ">")
-            .replace("&quot;", "\"")
-            .replace("&#39;", "'")
-            .replace(Regex("\n{3,}"), "\n\n")
-            .trim()
+        fun stripHtmlTags(html: String): String {
+            return html
+                .replace(Regex("<style[^>]*>[\\s\\S]*?</style>", RegexOption.IGNORE_CASE), "")
+                .replace(Regex("<script[^>]*>[\\s\\S]*?</script>", RegexOption.IGNORE_CASE), "")
+                .replace(Regex("<(br|p|div|h[1-6]|li|tr)[^>]*>", RegexOption.IGNORE_CASE), "\n")
+                .replace(Regex("<[^>]+>"), "")
+                .replace("&nbsp;", " ")
+                .replace("&amp;", "&")
+                .replace("&lt;", "<")
+                .replace("&gt;", ">")
+                .replace("&quot;", "\"")
+                .replace("&#39;", "'")
+                .replace(Regex("\n{3,}"), "\n\n")
+                .trim()
+        }
     }
 }

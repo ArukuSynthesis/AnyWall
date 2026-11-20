@@ -4,6 +4,7 @@ import android.content.ContentResolver
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.provider.DocumentsContract
 import android.provider.OpenableColumns
 import android.webkit.MimeTypeMap
 import com.anywall.converter.domain.model.InputFileItem
@@ -17,10 +18,9 @@ import java.util.Locale
 import java.util.UUID
 
 /**
- * Resolutor seguro de URIs (`content://` y `file://`) mediante `ContentResolver`.
+ * Resolutor seguro de URIs (`content://`, árboles de carpetas SAF y `file://`) mediante `ContentResolver` (v0.2).
  * Extrae nombre real, tamaño, tipo MIME, detecta el `SupportedFormat` (incluyendo inspección
- * de cabeceras mágicas como fallback) y gestiona copias temporales en caché cuando un motor
- * nativo requiere acceso aleatorio a archivo (`File` / `ParcelFileDescriptor`).
+ * de cabeceras mágicas como fallback) y gestiona copias temporales en caché.
  */
 class UriFileResolver(private val context: Context) {
 
@@ -37,10 +37,67 @@ class UriFileResolver(private val context: Context) {
                     Intent.FLAG_GRANT_READ_URI_PERMISSION
                 )
             } catch (_: SecurityException) {
-                // Algunos proveedores (como Share Sheet de WhatsApp o Galería) otorgan permisos temporales por Intent
             } catch (_: Throwable) {
             }
         }
+    }
+
+    /**
+     * Recorre una carpeta seleccionada mediante `ActivityResultContracts.OpenDocumentTree`
+     * y devuelve la lista de URIs de todos los archivos encontrados (incluyendo subcarpetas de primer nivel).
+     */
+    fun resolveFolderTreeUris(treeUri: Uri, maxFiles: Int = 250): List<Uri> {
+        tryTakePersistableReadPermission(treeUri)
+        val collected = mutableListOf<Uri>()
+
+        fun traverseFolder(parentDocId: String, depth: Int) {
+            if (collected.size >= maxFiles || depth > 2) return
+            val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, parentDocId)
+            try {
+                contentResolver.query(
+                    childrenUri,
+                    arrayOf(
+                        DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                        DocumentsContract.Document.COLUMN_MIME_TYPE,
+                        DocumentsContract.Document.COLUMN_DISPLAY_NAME
+                    ),
+                    null,
+                    null,
+                    null
+                )?.use { cursor ->
+                    val idIdx = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
+                    val mimeIdx = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_MIME_TYPE)
+                    val nameIdx = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
+
+                    while (cursor.moveToNext() && collected.size < maxFiles) {
+                        val docId = if (idIdx >= 0) cursor.getString(idIdx) else null
+                        if (docId.isNullOrBlank()) continue
+                        val mime = if (mimeIdx >= 0 && !cursor.isNull(mimeIdx)) cursor.getString(mimeIdx) else ""
+                        val name = if (nameIdx >= 0 && !cursor.isNull(nameIdx)) cursor.getString(nameIdx) else ""
+
+                        if (name.startsWith(".")) continue
+
+                        if (mime == DocumentsContract.Document.MIME_TYPE_DIR) {
+                            traverseFolder(docId, depth + 1)
+                        } else {
+                            val docUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, docId)
+                            collected.add(docUri)
+                        }
+                    }
+                }
+            } catch (_: Throwable) {
+            }
+        }
+
+        val rootDocId = try {
+            DocumentsContract.getTreeDocumentId(treeUri)
+        } catch (_: Throwable) {
+            null
+        }
+        if (!rootDocId.isNullOrBlank()) {
+            traverseFolder(rootDocId, 0)
+        }
+        return collected
     }
 
     /**
@@ -133,9 +190,6 @@ class UriFileResolver(private val context: Context) {
         )
     }
 
-    /**
-     * Abre un `InputStream` de lectura desde cualquier URI soportada.
-     */
     @Throws(IOException::class)
     fun openInputStream(uri: Uri): InputStream {
         return when (uri.scheme) {
@@ -148,10 +202,6 @@ class UriFileResolver(private val context: Context) {
         }
     }
 
-    /**
-     * Copia el contenido de la URI a un archivo temporal en el directorio de trabajo privado
-     * de la aplicación. Necesario para motores que operan sobre `File` o `RandomAccessFile`.
-     */
     @Throws(IOException::class)
     fun copyUriToTempFile(uri: Uri, prefix: String = "in_", extension: String = "tmp"): File {
         val workDir = getWorkingTempDir()
@@ -166,9 +216,6 @@ class UriFileResolver(private val context: Context) {
         return tempFile
     }
 
-    /**
-     * Crea un archivo temporal vacío en el directorio de trabajo privado de la app.
-     */
     fun createTempWorkingFile(prefix: String = "out_", extension: String): File {
         val workDir = getWorkingTempDir()
         val cleanExt = extension.trimStart('.').ifBlank { "tmp" }
@@ -183,24 +230,39 @@ class UriFileResolver(private val context: Context) {
         return dir
     }
 
-    /**
-     * Limpia archivos temporales antiguos en caché.
-     */
-    fun cleanupTempFiles() {
-        val dir = File(context.cacheDir, "anywall_work")
-        if (dir.exists()) {
-            dir.listFiles()?.forEach { file ->
-                try {
-                    file.deleteRecursively()
-                } catch (_: Throwable) {
-                }
+    fun getTempCacheSizeBytes(): Long {
+        val dirs = listOf(
+            File(context.cacheDir, "anywall_work"),
+            File(context.cacheDir, "anywall_payloads")
+        )
+        return dirs.sumOf { dir ->
+            if (dir.exists()) {
+                dir.walkTopDown().filter { it.isFile }.sumOf { it.length() }
+            } else {
+                0L
             }
         }
     }
 
-    /**
-     * Inspecciona los primeros bytes (magic header) del archivo cuando la URI no incluye extensión.
-     */
+    fun cleanupTempFiles(): Long {
+        val beforeBytes = getTempCacheSizeBytes()
+        val dirs = listOf(
+            File(context.cacheDir, "anywall_work"),
+            File(context.cacheDir, "anywall_payloads")
+        )
+        for (dir in dirs) {
+            if (dir.exists()) {
+                dir.listFiles()?.forEach { file ->
+                    try {
+                        file.deleteRecursively()
+                    } catch (_: Throwable) {
+                    }
+                }
+            }
+        }
+        return beforeBytes
+    }
+
     private fun sniffMagicHeader(uri: Uri): SupportedFormat? {
         return try {
             val header = ByteArray(16)
@@ -208,19 +270,19 @@ class UriFileResolver(private val context: Context) {
             if (read < 4) return null
 
             when {
-                // PDF: %PDF
                 header[0] == 0x25.toByte() && header[1] == 0x50.toByte() &&
                     header[2] == 0x44.toByte() && header[3] == 0x46.toByte() -> SupportedFormat.PDF
 
-                // PNG: 89 50 4E 47
                 header[0] == 0x89.toByte() && header[1] == 0x50.toByte() &&
                     header[2] == 0x4E.toByte() && header[3] == 0x47.toByte() -> SupportedFormat.PNG
 
-                // JPG: FF D8 FF
                 header[0] == 0xFF.toByte() && header[1] == 0xD8.toByte() &&
                     header[2] == 0xFF.toByte() -> SupportedFormat.JPG
 
-                // WEBP / WAV: RIFF....WEBP o RIFF....WAVE
+                read >= 6 &&
+                    header[0] == 0x47.toByte() && header[1] == 0x49.toByte() &&
+                    header[2] == 0x46.toByte() && header[3] == 0x38.toByte() -> SupportedFormat.GIF
+
                 read >= 12 &&
                     header[0] == 0x52.toByte() && header[1] == 0x49.toByte() &&
                     header[2] == 0x46.toByte() && header[3] == 0x46.toByte() -> {
@@ -232,26 +294,40 @@ class UriFileResolver(private val context: Context) {
                     }
                 }
 
-                // BMP: BM
+                read >= 12 &&
+                    header[4] == 0x66.toByte() && header[5] == 0x74.toByte() &&
+                    header[6] == 0x79.toByte() && header[7] == 0x70.toByte() -> {
+                    val brand = String(header, 8, 4, Charsets.US_ASCII).lowercase(Locale.ROOT)
+                    when {
+                        brand.startsWith("hei") || brand.startsWith("mif") || brand.startsWith("msf") -> SupportedFormat.HEIC
+                        brand.startsWith("m4a") -> SupportedFormat.M4A
+                        brand.startsWith("qt") -> SupportedFormat.MOV
+                        else -> SupportedFormat.MP4
+                    }
+                }
+
                 header[0] == 0x42.toByte() && header[1] == 0x4D.toByte() -> SupportedFormat.BMP
 
-                // 7z: 37 7A BC AF 27 1C
                 read >= 6 &&
                     header[0] == 0x37.toByte() && header[1] == 0x7A.toByte() &&
                     header[2] == 0xBC.toByte() && header[3] == 0xAF.toByte() -> SupportedFormat.SEVEN_Z
 
-                // GZIP: 1F 8B
+                read >= 6 &&
+                    header[0] == 0xFD.toByte() && header[1] == 0x37.toByte() &&
+                    header[2] == 0x7A.toByte() && header[3] == 0x58.toByte() &&
+                    header[4] == 0x5A.toByte() && header[5] == 0x00.toByte() -> SupportedFormat.XZ
+
+                header[0] == 0x42.toByte() && header[1] == 0x5A.toByte() &&
+                    header[2] == 0x68.toByte() -> SupportedFormat.BZ2
+
                 header[0] == 0x1F.toByte() && header[1] == 0x8B.toByte() -> SupportedFormat.GZ
 
-                // ZIP / DOCX: PK\x03\x04
                 header[0] == 0x50.toByte() && header[1] == 0x4B.toByte() &&
                     header[2] == 0x03.toByte() && header[3] == 0x04.toByte() -> SupportedFormat.ZIP
 
-                // Matroska / WebM: 1A 45 DF A3
                 header[0] == 0x1A.toByte() && header[1] == 0x45.toByte() &&
                     header[2] == 0xDF.toByte() && header[3] == 0xA3.toByte() -> SupportedFormat.MKV
 
-                // MP3 ID3 o sync frame
                 (header[0] == 0x49.toByte() && header[1] == 0x44.toByte() && header[2] == 0x33.toByte()) ||
                     (header[0] == 0xFF.toByte() && (header[1].toInt() and 0xE0) == 0xE0) -> SupportedFormat.MP3
 
@@ -276,9 +352,14 @@ class UriFileResolver(private val context: Context) {
             extension: String,
             suffix: String = ""
         ): String {
-            val cleanBase = sanitizeFileName(baseName)
+            val sanitized = sanitizeFileName(baseName)
+            val cleanBase = sanitized
                 .removeSuffix(".tar.gz")
-                .substringBeforeLast('.', missingDelimiterValue = sanitizeFileName(baseName))
+                .removeSuffix(".tar.xz")
+                .removeSuffix(".tar.bz2")
+                .let { name ->
+                    if (name.contains('.')) name.substringBeforeLast('.') else name
+                }
                 .ifBlank { "anywall_convertido" }
             val cleanExt = extension.trimStart('.').lowercase(Locale.ROOT)
             return if (cleanExt.isEmpty() || cleanExt == "folder") {

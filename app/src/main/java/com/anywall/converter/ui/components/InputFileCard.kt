@@ -1,8 +1,6 @@
 package com.anywall.converter.ui.components
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -13,6 +11,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
@@ -22,24 +22,28 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.anywall.converter.core.LocalThumbnailLoader
 import com.anywall.converter.domain.model.InputFileItem
 
 /**
- * Tarjeta que muestra un archivo cargado en el lote actual en `ConfigureScreen`.
+ * Tarjeta que muestra un archivo cargado en el lote actual en `ConfigureScreen` (v0.2),
+ * con miniatura local y controles para reordenar hacia arriba/abajo o quitar del lote.
  */
 @Composable
 fun InputFileCard(
     item: InputFileItem,
+    index: Int,
+    totalCount: Int,
+    thumbnailLoader: LocalThumbnailLoader?,
+    onMoveUp: () -> Unit,
+    onMoveDown: () -> Unit,
     onRemove: () -> Unit,
     enabled: Boolean = true,
     modifier: Modifier = Modifier
 ) {
-    val accent = categoryAccentColor(item.format.category)
-
     Card(
         modifier = modifier.fillMaxWidth(),
         shape = RoundedCornerShape(14.dp),
@@ -53,20 +57,13 @@ fun InputFileCard(
                 .padding(horizontal = 12.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Box(
-                modifier = Modifier
-                    .size(width = 52.dp, height = 40.dp)
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(accent.copy(alpha = 0.18f)),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    text = item.format.label,
-                    style = MaterialTheme.typography.labelLarge,
-                    fontWeight = FontWeight.ExtraBold,
-                    color = accent
-                )
-            }
+            ThumbnailPreviewBox(
+                uri = item.uri,
+                format = item.format,
+                thumbnailLoader = thumbnailLoader,
+                modifier = Modifier.size(width = 52.dp, height = 44.dp),
+                cornerRadius = 10.dp
+            )
 
             Spacer(modifier = Modifier.width(12.dp))
 
@@ -83,15 +80,50 @@ fun InputFileCard(
                     overflow = TextOverflow.Ellipsis
                 )
                 Text(
-                    text = "${item.format.category.displayNameEs} • ${item.format.label} • ${item.formattedSize}",
+                    text = "#${index + 1} • ${item.format.category.displayNameEs} • ${item.format.label} • ${item.formattedSize}",
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
 
+            if (totalCount > 1) {
+                IconButton(
+                    onClick = onMoveUp,
+                    enabled = enabled && index > 0,
+                    modifier = Modifier.size(34.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.KeyboardArrowUp,
+                        contentDescription = "Subir ${item.displayName}",
+                        tint = if (index > 0) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f)
+                        }
+                    )
+                }
+
+                IconButton(
+                    onClick = onMoveDown,
+                    enabled = enabled && index < totalCount - 1,
+                    modifier = Modifier.size(34.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.KeyboardArrowDown,
+                        contentDescription = "Bajar ${item.displayName}",
+                        tint = if (index < totalCount - 1) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f)
+                        }
+                    )
+                }
+            }
+
             IconButton(
                 onClick = onRemove,
-                enabled = enabled
+                enabled = enabled,
+                modifier = Modifier.size(36.dp)
             ) {
                 Icon(
                     imageVector = Icons.Default.Close,

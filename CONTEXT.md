@@ -1,16 +1,18 @@
-# AnyWall: Universal Converter — Documento de Contexto Arquitectónico
+# AnyWall: Universal Converter — Documento de Contexto Arquitectónico (v0.2)
 
-Este documento sirve como referencia técnica viva para futuras iteraciones, mantenimiento y evolución de **AnyWall: Universal Converter** (`com.anywall.converter`). Contiene las reglas inquebrantables, decisiones de diseño, arquitectura de paquetes, detalle de los 4 motores locales, flujos de datos y guías de compilación.
+Este documento sirve como referencia técnica viva para futuras iteraciones, mantenimiento y evolución de **AnyWall: Universal Converter** (`com.anywall.converter`). Contiene las reglas inquebrantables, decisiones de diseño, arquitectura de paquetes, detalle de los 4 motores locales, flujos de datos y guías de compilación actualizadas a la versión **v0.2**.
 
 ---
 
 ## 1. Identidad y Propósito del Proyecto
 
 - **Nombre de la app:** AnyWall: Universal Converter
+- **Autor / Desarrollador:** **SynthesizerEnd** (`https://github.com/ArukuSynthesis/AnyWall`)
 - **Application ID / Namespace:** `com.anywall.converter`
+- **Versión actual:** `versionCode = 2` • `versionName = "0.2"`
 - **Idioma de la interfaz:** 100% español
 - **Propósito:** Conversor universal nativo de Android (imágenes, documentos/PDF, audio, video y archivos comprimidos) con procesamiento **100% local en el hardware del dispositivo**, sin dependencias en la nube y operable íntegramente en modo avión.
-- **Estado actual:** MVP completo, funcional, sin stubs ni `// TODO`, compilando limpiamente (`BUILD SUCCESSFUL`) con pruebas unitarias pasando.
+- **Estado actual:** Versión `v0.2` completa, funcional, sin stubs ni `// TODO`, con migración de base de datos Room (`v1 -> v2`), miniaturas locales, importación de carpetas completas, modificador visual interactivo de páginas PDF en vista previa, fusión de lotes mixtos (imágenes + documentos/PDF), créditos y licencias Open Source (`AboutCreditsDialog` + `THIRD_PARTY_NOTICES.md`), cifrado/desbloqueo PDF, recorte/silenciado multimedia, soporte `.tar.xz`/`.tar.bz2`/`.heic`/`.gif` y pruebas unitarias ampliadas pasando al 100%.
 
 ---
 
@@ -19,7 +21,7 @@ Este documento sirve como referencia técnica viva para futuras iteraciones, man
 Cualquier iteración futura **debe respetar estrictamente** estas 7 reglas:
 
 1. **ESTRICTAMENTE 100% OFFLINE:**
-   - Prohibido añadir `<uses-permission android:name="android.permission.INTERNET" />` o `<uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />` en `app/src/main/AndroidManifest.xml`.
+   - Prohibido añadir `<uses-permission android:name="android.permission.INTERNET" />` o habilitar `ACCESS_NETWORK_STATE` en `app/src/main/AndroidManifest.xml` (de hecho, `ACCESS_NETWORK_STATE` tiene `tools:node="remove"` para eliminar el permiso transitivo de WorkManager).
    - Prohibido integrar APIs remotas, telemetría, Crashlytics, analítica o descarga de recursos externos.
    - En `WebViewPdfGenerator`, el `WebView` offscreen bloquea cargas de red (`blockNetworkLoads = true`, `blockNetworkImage = true`) e intercepta `http`/`https` devolviendo respuestas vacías.
 2. **CERO PLACEHOLDERS O STUBS:**
@@ -39,9 +41,9 @@ Cualquier iteración futura **debe respetar estrictamente** estas 7 reglas:
 6. **PROCESAMIENTO EN SEGUNDO PLANO CON WORKMANAGER:**
    - Todas las conversiones se ejecutan en `BatchConversionWorker` (`CoroutineWorker`) con `ForegroundInfo` (`FOREGROUND_SERVICE_TYPE_DATA_SYNC`) mostrando una notificación persistente con barra de progreso real.
 7. **ALMACENAMIENTO SEGURO (SCOPED STORAGE) + ROOM:**
-   - Lectura exclusiva mediante `ContentResolver` (`UriFileResolver`).
+   - Lectura exclusiva mediante `ContentResolver` (`UriFileResolver`), incluyendo recorrido recursivo de árboles SAF (`OpenDocumentTree`).
    - Escritura en `Downloads/AnyWall/` usando `MediaStore.Downloads` con `IS_PENDING` en API 29+ y almacenamiento público + `FileProvider` (con fallback a `getExternalFilesDir`) en API 26-28.
-   - Registro automático de cada archivo generado en Room (`anywall_converter.db`) y apertura/compartición segura mediante `FileProvider` / `MediaStore`.
+   - Registro automático de cada archivo generado en Room (`anywall_converter.db`, esquema v2) y apertura/compartición individual o múltiple mediante `FileProvider` / `MediaStore`.
 
 ---
 
@@ -54,19 +56,15 @@ Definido en `gradle/libs.versions.toml` y `app/build.gradle.kts`:
 | **SDK Android** | `minSdk = 26`, `targetSdk = 35`, `compileSdk = 35` |
 | **Gradle / AGP / Kotlin / KSP** | Gradle `8.9`, AGP `8.7.3`, Kotlin `2.0.21`, KSP `2.0.21-1.0.28`, JVM Target `17` |
 | **UI & Compose** | Compose BOM `2024.12.01` (Material 3, Material Icons Extended), `navigation-compose:2.8.5`, `lifecycle-viewmodel-compose:2.8.7`, `activity-compose:1.9.3` |
-| **Persistencia & Background** | `room-runtime/ktx/compiler:2.6.1`, `work-runtime-ktx:2.10.0`, `kotlinx-coroutines-android:1.9.0` |
+| **Persistencia & Background** | `room-runtime/ktx/compiler:2.6.1` (Esquema v2 + `MIGRATION_1_2`), `work-runtime-ktx:2.10.0`, `kotlinx-coroutines-android:1.9.0` |
 | **Imágenes / SVG** | `com.caverock:androidsvg-aar:1.4` + APIs nativas (`ImageDecoder`, `BitmapFactory`, `PdfRenderer`, `PdfDocument`) |
 | **Documentos / PDF** | `com.tom-roush:pdfbox-android:2.0.27.0` + `org.zwobble.mammoth:mammoth:1.5.0` |
 | **Audio / Video** | `androidx.media3:media3-{transformer,effect,common,muxer}:1.4.1` + `de.sciss:jump3r:1.0.5` |
 | **Archivos Comprimidos** | `org.apache.commons:commons-compress:1.26.1` + `org.tukaani:xz:1.9` |
 
-> **Nota sobre dependencias adicionales justificadas:**
-> - `androidx.media3:media3-muxer:1.4.1`: Es dependencia `runtime` de `media3-transformer`, declarada como `implementation` para poder implementar el `Muxer.Factory` personalizado (`WebmMatroskaMuxerFactory`) para contenedores `WEBM`/`MKV`.
-> - `de.sciss:jump3r:1.0.5`: Implementación pura en Java de LAME para codificar MP3 de forma real sin binarios nativos externos ni `javax.sound.sampled`.
-
 ---
 
-## 4. Mapa de Paquetes y Archivos
+## 4. Mapa de Paquetes y Archivos (v0.2)
 
 ```text
 app/src/main/
@@ -81,32 +79,36 @@ app/src/main/
     │   └── PdfPrintCallbackBridge.kt          # Puente package-private para LayoutResultCallback/WriteResultCallback
     └── com/anywall/converter/
         ├── AnyWallApplication.kt              # Inicializa PDFBoxResourceLoader y AppContainer
-        ├── MainActivity.kt                    # Share Sheet (ACTION_SEND / SEND_MULTIPLE), POST_NOTIFICATIONS, NavHost
+        ├── MainActivity.kt                    # Share Sheet, POST_NOTIFICATIONS, tema dinámico/manual, NavHost
         ├── core/
         │   ├── AppContainer.kt                # Contenedor DI manual
-        │   ├── FileShareHelper.kt             # Abrir (ACTION_VIEW) y compartir (ACTION_SEND) con FileProvider/MediaStore
+        │   ├── AppPreferences.kt              # Preferencias locales (tema Sistema/Claro/Oscuro, autolimpieza, EXIF)
+        │   ├── FileShareHelper.kt             # Abrir (ACTION_VIEW) y compartir uno o varios (ACTION_SEND / SEND_MULTIPLE)
+        │   ├── LocalThumbnailLoader.kt        # Miniaturas locales 96x96 con LruCache (imágenes, SVG, PDF pág. 1, video frame)
         │   ├── NotificationHelper.kt          # Canal de notificaciones, ForegroundInfo y notificación de finalización
         │   ├── ScopedStorageManager.kt        # Guardado en Downloads/AnyWall/ (MediaStore API 29+ / Legacy API 26-28)
-        │   └── UriFileResolver.kt             # ContentResolver, detección MIME/extensión/magic bytes, staging temporal
+        │   └── UriFileResolver.kt             # ContentResolver, SAF OpenDocumentTree recursivo, detección MIME/magic bytes
         ├── domain/
         │   ├── engine/
         │   │   ├── FileConverterEngine.kt     # Interfaz común de motores
-        │   │   └── ConverterEngineRegistry.kt # Enrutamiento inteligente origen/destino -> motor
+        │   │   └── ConverterEngineRegistry.kt # Enrutamiento inteligente origen/destino -> motor (incl. lotes mixtos Imagen+Doc)
         │   ├── model/
         │   │   ├── ActiveJobState.kt
-        │   │   ├── ConversionJobResult.kt
-        │   │   ├── ConversionOptions.kt
+        │   │   ├── ConversionJobResult.kt     # Incluye sourceSizeBytes en v0.2
+        │   │   ├── ConversionOptions.kt       # Calidad, rotación, EXIF, PDF password/página, pdfPageEditsJson, video mute, trim
         │   │   ├── FormatCategory.kt
-        │   │   ├── HistoryRecord.kt
+        │   │   ├── HistoryRecord.kt           # Calcula ahorro de peso (Antes -> Después, -%)
         │   │   ├── InputFileItem.kt
-        │   │   ├── PdfActionMode.kt
-        │   │   ├── SupportedFormat.kt
+        │   │   ├── PdfActionMode.kt           # Incluye PROTECT_PASSWORD y UNLOCK_PASSWORD
+        │   │   ├── PdfPageConfig.kt           # PdfPageSize (A4 / Carta) y PdfPageOrientation (Vertical / Horizontal)
+        │   │   ├── PdfPageEditSpec.kt         # Modelo y serializador determinista de páginas editadas/rotadas/reordenadas
+        │   │   ├── SupportedFormat.kt         # Incluye HEIC, GIF, TAR_XZ, TAR_BZ2, XZ, BZ2
         │   │   └── VideoResolution.kt
         │   └── repository/
         │       └── ConversionHistoryRepository.kt
         ├── data/
         │   ├── local/
-        │   │   ├── AnyWallDatabase.kt
+        │   │   ├── AnyWallDatabase.kt         # Esquema v2 con MIGRATION_1_2 y exportSchema = true
         │   │   ├── ConversionHistoryRepositoryImpl.kt
         │   │   ├── dao/ConversionHistoryDao.kt
         │   │   └── entity/ConversionHistoryEntity.kt
@@ -119,17 +121,21 @@ app/src/main/
         │       └── ArchiveEngineImpl.kt
         ├── workers/
         │   ├── BatchConversionWorker.kt       # CoroutineWorker con progreso en vivo y registro en Room
-        │   └── ConversionWorkScheduler.kt     # Serialización de lote JSON + WorkManager unique expedited work
+        │   └── ConversionWorkScheduler.kt     # Encolado seguro APPEND_OR_REPLACE + verificación de trabajos activos
         └── ui/
             ├── theme/{Color,Theme,Type}.kt
             ├── navigation/{AnyWallDestination,AnyWallNavHost}.kt
             ├── components/
+            │   ├── AboutCreditsDialog.kt      # Créditos de SynthesizerEnd y catálogo de 9 repositorios Open Source
             │   ├── CategoryQuickCard.kt
             │   ├── ConversionProgressCard.kt
             │   ├── FormatChipSelector.kt
-            │   ├── HistoryItemCard.kt
-            │   ├── InputFileCard.kt
-            │   └── OfflinePrivacyBadge.kt
+            │   ├── HistoryItemCard.kt         # Miniatura + insignia de ahorro de peso + modo multiselección
+            │   ├── InputFileCard.kt           # Miniatura + botones ↑/↓ de reordenamiento del lote
+            │   ├── OfflinePrivacyBadge.kt
+            │   ├── PdfVisualEditorDialog.kt   # Modificador visual de páginas PDF en cuadrícula + zoom de página completa
+            │   ├── SettingsDialog.kt          # Ajustes locales (tema, EXIF, autolimpieza, liberación de caché y acceso a Créditos)
+            │   └── ThumbnailPreviewBox.kt     # Previsualización asíncrona con respaldo de insignia
             └── screens/
                 ├── MainViewModel.kt
                 ├── HomeScreen.kt
@@ -137,84 +143,56 @@ app/src/main/
                 └── HistoryScreen.kt
 ```
 
-Pruebas unitarias actuales:
+Pruebas unitarias y avisos legales actuales:
 - `app/src/test/java/com/anywall/converter/AnyWallEngineUnitTest.kt`
+- `THIRD_PARTY_NOTICES.md` y `README.md`
 
 ---
 
-## 5. Detalle Técnico y Decisiones Clave de los 4 Motores
+## 5. Novedades Técnicas de v0.2 en los 4 Motores y la UI
 
 ### Motor 1: `ImageEngineImpl`
-- **Formatos:** `JPG`, `PNG`, `WEBP`, `BMP`, `SVG`, y conversión bidireccional con `PDF`.
-- **Decodificación:** Usa `ImageDecoder` (con `ALLOCATOR_SOFTWARE`) en API 28+ con fallback a `BitmapFactory` (calculando `inSampleSize` según `maxDimensionPx`). Aplana el canal alfa sobre blanco al exportar a `JPG`, `BMP` o `PDF`.
-- **BMP nativo:** Android no incluye `Bitmap.CompressFormat.BMP`; se implementó `writeBitmapAs24BitBmp()` escribiendo cabeceras `BITMAPFILEHEADER` (14 B) + `BITMAPINFOHEADER` (40 B) y filas BGR bottom-up con relleno de 4 bytes.
-- **SVG:** Renderizado mediante `com.caverock.androidsvg.SVG` escalado al tamaño objetivo.
-- **Imágenes → PDF:** `android.graphics.pdf.PdfDocument`, con opción de unir en un único PDF (`mergeIntoSinglePdf`) o generar PDFs individuales; aplica compresión JPEG intermedia cuando `quality < 98`.
-- **PDF → Imágenes (`JPG` / `PNG`):** `android.graphics.pdf.PdfRenderer` a escala 2x (~144 DPI) respetando `maxDimensionPx` y rango de páginas (`parsePageIndices`, ej. `"1-3, 5"`).
+- **Formatos de entrada:** `JPG`, `PNG`, `WEBP`, `BMP`, `SVG`, y ahora también **`HEIC`/`HEIF`** y **`GIF`** (con detección por extensión, MIME e inspección de cabeceras mágicas `GIF8` y `ftypheic`/`ftypmif1`).
+- **Rotación y Privacidad:** Soporta rotación `0°`, `90°`, `180°` y `270°` mediante `Matrix.postRotate()`, y limpieza de metadatos EXIF/GPS al recodificar las muestras de píxeles.
+- **Imágenes → PDF cifrado y extracción de páginas seleccionadas:** Permite aplicar contraseña de protección (`StandardProtectionPolicy` de PDFBox) directamente al PDF generado a partir de un lote de imágenes, y al exportar PDF a imágenes (`JPG`, `PNG`, `WEBP`) respeta el orden, rotación por página y páginas excluidas del modificador visual (`PdfPageEditSpec`).
 
-### Motor 2: `DocumentEngineImpl` + `WebViewPdfGenerator` + `PdfPrintCallbackBridge`
-- **PDFBox:** Inicializado en `AnyWallApplication` y verificado con `PDFBoxResourceLoader.isReady()` en `DocumentEngineImpl`.
-- **Operaciones sobre PDF (`PdfActionMode`):**
-  - `MERGE_OR_CONVERT`: Une múltiples PDFs con `PDFMergerUtility` (usando `MemoryUsageSetting.setupMixed(32 MB)`).
-  - `SPLIT_RANGE`: Importa páginas seleccionadas en un nuevo `PDDocument`.
-  - `SPLIT_ALL_PAGES`: Divide todas las páginas con `Splitter`.
-  - `OPTIMIZE_COMPRESS`: Aplica estrategia dual — primero recomprime `PDImageXObject` preservando texto vectorial, y si calidad < 90% evalúa rasterización controlada con `PdfRenderer` + `JPEGFactory`, eligiendo el resultado de menor tamaño.
-- **DOCX / HTML / TXT / MD → PDF:**
-  - `DOCX` se transforma a HTML mediante `org.zwobble.mammoth.DocumentConverter`.
-  - `MD` dispone de un parser completo integrado (encabezados, listas ordenadas/desordenadas, bloques de código, citas, negrita, cursiva, código inline, enlaces sin red).
-  - El HTML estilizado se renderiza en `Dispatchers.Main` con un `WebView` offscreen (`WebViewPdfGenerator`) acoplado a un `PrintDocumentAdapter` personalizado (`OffscreenWebViewPrintAdapter`) y `android.print.PdfPrintCallbackBridge` (ubicado intencionalmente en el paquete `android.print` para instanciar los constructores package-private de `LayoutResultCallback` y `WriteResultCallback`).
-  - Incluye un **fallback seguro** (`renderWebViewCanvasFallback`) que pagina el `WebView` sobre `PdfDocument` si el subsistema de impresión del dispositivo fallara.
-- **Exportación a TXT / HTML:** Extracción de texto desde PDF con `PDFTextStripper`, desde DOCX con `DocumentConverter.extractRawText`, y limpieza de etiquetas desde HTML.
+### Motor 2: `DocumentEngineImpl` + `WebViewPdfGenerator`
+- **Modificador Visual de PDF en Vista Previa (`PdfVisualEditorDialog` + `PdfPageEditSpec`):**
+  - Renderiza miniaturas reales de todas las páginas de todos los PDFs cargados en el lote mediante `PdfRenderer` en segundo plano.
+  - Permite **rotar páginas individuales** (`+90°`), **reordenar páginas** libremente (`←` / `→`), **excluir o incluir páginas** con un toque y abrir una **vista previa ampliada** de cualquier página.
+  - Al exportar o unir PDFs (o exportar a `TXT` / imágenes), aplica exactamente la secuencia, rotación (`PDPage.rotation`) y selección de páginas configurada en la vista previa.
+- **Fusión de lotes mixtos (Imágenes + Documentos/PDF):** Permite mezclar en un mismo lote archivos PDF, documentos (`DOCX`, `HTML`, `MD`, `TXT`) e imágenes (`JPG`, `PNG`, `WEBP`, `HEIC`, `GIF`, `BMP`, `SVG`) para generar un único PDF consolidado o convertirlos individualmente.
+- **Protección y Desbloqueo de PDF con contraseña:**
+  - `PdfActionMode.PROTECT_PASSWORD`: cifra archivos PDF con `AccessPermission` + `StandardProtectionPolicy` (128 bits).
+  - `PdfActionMode.UNLOCK_PASSWORD`: abre un PDF cifrado con su clave actual y elimina la seguridad con `doc.isAllSecurityToBeRemoved = true`.
+- **Tamaño y orientación de página:** `WebViewPdfGenerator` soporta `PdfPageSize.A4` (`ISO_A4`) y `PdfPageSize.LETTER` (`NA_LETTER`), tanto en `PdfPageOrientation.PORTRAIT` como `PdfPageOrientation.LANDSCAPE`.
 
 ### Motor 3: `MediaEngineImpl` + `PcmWavMp3AudioHelper`
-- **Video (`MP4`, `MKV`, `MOV`, `WEBM`):**
-  - Usa `Media3 Transformer` con `Presentation.createForHeight(targetHeight)` para `1080p`, `720p` y `480p`.
-  - Para `WEBM`/`MKV`, intenta primero `VP8` + `Opus` mediante `WebmMatroskaMuxerFactory` (`MediaMuxer.OutputFormat.MUXER_OUTPUT_WEBM`), y si el hardware del dispositivo no dispone de encoder VP8/Opus cae de forma segura a `H.264` + `AAC` con `DefaultMuxer`.
-- **Audio (`MP3`, `AAC`, `M4A`, `WAV`):**
-  - Fase 1: Extrae la pista de audio en `Media3 Transformer` usando `EditedMediaItem.Builder(mediaItem).setRemoveVideo(true).build()`.
-  - `M4A`: Salida directa de Media3 Transformer.
-  - `AAC`: `PcmWavMp3AudioHelper.extractAdtsAacFromMp4()` envuelve cada trama AAC con cabecera ADTS de 7 bytes.
-  - `WAV`: `decodeMediaFileToPcm16Le()` (`MediaExtractor` + `MediaCodec`, con atajo directo para WAV PCM 16-bit) + `writeWavFileFromPcm16Le()` (RIFF WAVE de 44 bytes).
-  - `MP3`: `encodePcm16LeToMp3()` instancia directamente los submódulos de `de.sciss.jump3r.mp3.Lame` evitando `LameEncoder` (que referencia `javax.sound.sampled`, no presente en Android).
-- **Progreso continuo:** Polling en `Dispatchers.Main` cada `150 ms` sobre `transformer.getProgress(progressHolder)`.
+- **Silenciar video:** Interruptor `muteVideoAudio` que configura `EditedMediaItem.Builder(mediaItem).setRemoveAudio(true)` en `Media3 Transformer`.
+- **Recorte de tiempo (Trim inicio–fin):** Campos de segundo inicial y final aplicados mediante `MediaItem.ClippingConfiguration` tanto para conversión de video como para extracción/conversión de audio (`MP3`, `AAC`, `M4A`, `WAV`).
 
 ### Motor 4: `ArchiveEngineImpl`
-- **Empaquetado (`ZIP`, `TAR`, `TAR.GZ`):** Usa `ZipArchiveOutputStream`, `TarArchiveOutputStream` (`LONGFILE_POSIX`, `BIGNUMBER_POSIX`) y `GzipCompressorOutputStream`. Resuelve colisiones de nombres de entrada automáticamente.
-- **Extracción (`ZIP`, `TAR`, `TAR.GZ`, `GZ`, `7Z`):**
-  - Soporta `.7z` mediante `SevenZFile.builder().setFile(temp7z).get()` junto con `org.tukaani:xz`.
-  - Detecta archivos `.gz` que contienen internamente un `.tar`.
-  - Extrae en subcarpetas organizadas bajo `Downloads/AnyWall/<nombre_archivo>/`.
-  - **Seguridad Zip-Slip:** `splitEntryFolderAndName()` elimina cualquier segmento `.`, `..` y caracteres inválidos antes de delegar el guardado a `ScopedStorageManager`.
+- **Nuevos formatos de empaquetado y extracción:**
+  - Empaquetado por lote en `.zip`, `.tar`, `.tar.gz`, **`.tar.xz`** (`XZCompressorOutputStream`) y **`.tar.bz2`** (`BZip2CompressorOutputStream`).
+  - Extracción completa de `.zip`, `.tar`, `.tar.gz`, **`.tar.xz`**, **`.tar.bz2`**, `.gz`, **`.xz`**, **`.bz2`** y `.7z` con detección automática de TAR interno y sanitización anti-*Zip-Slip* (`splitEntryFolderAndName`).
+
+### Soporte Avanzado Multi-Archivo, Carpetas, Créditos y Room v2
+- **Importación de carpetas completas (`OpenDocumentTree`):** `UriFileResolver.resolveFolderTreeUris` recorre recursivamente cualquier directorio seleccionado por el usuario mediante `DocumentsContract.buildChildDocumentsUriUsingTree` e importa todos los archivos compatibles de una sola vez.
+- **Herramientas rápidas de ordenamiento por lote:** Botones en `ConfigureScreen` para ordenar el lote por **Nombre (A–Z)**, **Tamaño**, **Invertir orden**, o mover archivos individualmente (`↑`/`↓`).
+- **Créditos y Licencias Open Source (`AboutCreditsDialog` + `THIRD_PARTY_NOTICES.md`):** Atribución oficial a **SynthesizerEnd** y listado detallado de los 9 proyectos Open Source utilizados con sus identificadores SPDX y enlaces copiables a sus repositorios oficiales.
+- **Room v2 (`MIGRATION_1_2`) e insignia de ahorro de peso:** Añade `source_size_bytes` a `conversion_history` con migración SQL explícita y muestra la variación porcentual (`Antes → Después, -%`).
+- **Miniaturas locales (`LocalThumbnailLoader`) y Multiselección en Historial:** Caché `LruCache` de 4 MB en memoria para miniaturas 96x96 px y modo de selección múltiple en `HistoryScreen` para compartir o eliminar varios archivos en bloque.
+- **Cola segura y Autolimpieza de caché:** `ConversionWorkScheduler` usa `ExistingWorkPolicy.APPEND_OR_REPLACE`, y `MainViewModel` limpia automáticamente `anywall_work` / `anywall_payloads` al iniciar la app cuando no hay trabajos activos.
 
 ---
 
-## 6. Flujo de Trabajo, Concurrencia y Persistencia
-
-1. **Selección de archivos:**
-   - Desde `HomeScreen` (`ActivityResultContracts.OpenMultipleDocuments` general o filtrado por MIME de categoría), `ConfigureScreen` (botón "Añadir"), o Android Share Sheet (`MainActivity.handleIncomingShareIntent`).
-   - `MainViewModel.addInputUris()` resuelve las URIs en `Dispatchers.IO` vía `UriFileResolver` y recalcula los formatos destino disponibles consultando `ConverterEngineRegistry.getAvailableTargetFormats()`.
-2. **Encolado en `WorkManager`:**
-   - Para evitar el límite de 10 KB de `androidx.work.Data` en lotes grandes, `ConversionWorkScheduler` serializa la lista completa de `InputFileItem` y `ConversionOptions` en un archivo JSON temporal en `cacheDir/anywall_payloads/batch_<uuid>.json` y pasa únicamente su ruta al Worker.
-   - Se encola como trabajo único (`UNIQUE_WORK_NAME = "anywall_active_batch_conversion"`) con `ExistingWorkPolicy.REPLACE` y `OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST`.
-3. **Ejecución en `BatchConversionWorker`:**
-   - Llama a `setForeground(notificationHelper.createForegroundInfo(...))` al iniciar.
-   - Propaga progreso al `WorkManager` (`setProgressAsync`) y actualiza la notificación con throttling cada `220 ms`.
-   - Al terminar, persiste todos los `ConversionJobResult` en Room (`historyRepository.recordConversions(results)`), emite notificación de finalización y elimina el archivo JSON temporal de payload.
-4. **Historial en Room (`AnyWallDatabase`):**
-   - Tabla: `conversion_history` (versión `1`, `exportSchema = false`).
-   - Al eliminar un registro desde la UI, `ConversionHistoryRepositoryImpl.deleteRecord()` borra tanto el archivo físico (vía `ContentResolver.delete` y/o `File.delete`) como el registro en Room.
-
----
-
-## 7. Guía de Compilación y Verificación
-
-En un entorno estándar con Android SDK 35 y JDK 17:
+## 6. Guía de Compilación y Verificación
 
 ```bash
-# Compilar APK debug y ejecutar pruebas unitarias
+# Compilar APK debug/release y ejecutar pruebas unitarias
 ./gradlew assembleDebug testDebugUnitTest
 
-# Compilar APK release v0.1 firmado mediante variables de entorno (sin secretos en el repo)
+# Compilar APK release v0.2 firmado mediante variables de entorno
 ANYWALL_KEYSTORE_PATH=/ruta/keystore.jks \
 ANYWALL_KEYSTORE_PASSWORD="..." \
 ANYWALL_KEY_ALIAS="..." \
@@ -225,29 +203,3 @@ ANYWALL_KEY_PASSWORD="..." \
 aapt2 dump permissions app/build/outputs/apk/release/app-release.apk
 grep -rn "TODO" app/src/
 ```
-
-**Artefactos verificados:**
-- `app/build/outputs/apk/debug/app-debug.apk` (~30 MB, `BUILD SUCCESSFUL`).
-- `app/build/outputs/apk/release/AnyWall-v0.1-release.apk` (`versionName = "0.1"`, ~23 MB, `BUILD SUCCESSFUL`, firmado con esquema v2 y verificado con `apksigner verify`).
-- Auditoría con `aapt2 dump permissions`: **0 permisos de red** en el APK final (`AndroidManifest.xml` incluye `tools:node="remove"` para `ACCESS_NETWORK_STATE` con el fin de bloquear el permiso transitivo inyectado por `work-runtime`).
-- Pruebas unitarias en `AnyWallEngineUnitTest` pasando al 100% en debug y release (`testDebugUnitTest` y `testReleaseUnitTest`).
-
-> **Nota de ProGuard / Release:** Actualmente `isMinifyEnabled = false` en `release` para evitar roturas por reflexión en PDFBox, Mammoth y Commons Compress. Si en una iteración futura se activa R8 (`isMinifyEnabled = true`), revisar y probar exhaustivamente `app/proguard-rules.pro`.
-
----
-
-## 8. Pendientes y Hoja de Ruta Sugerida para Futuras Iteraciones
-
-1. **Pruebas instrumentadas (`androidTest`):**
-   - Añadir pruebas en emulador/dispositivo real para validar:
-     - `WebViewPdfGenerator` + `PdfPrintCallbackBridge` en Android 13/14/15.
-     - `MediaEngineImpl` con video real (resolución 720p/480p y extracción a MP3/M4A/AAC/WAV).
-     - `ScopedStorageManager` en API 29+ y API 26-28.
-     - `AnyWallDatabase` y migraciones de Room.
-2. **Mejoras funcionales potenciales:**
-   - **Cola paralela / historial de trabajos fallidos:** Permitir encolar múltiples lotes secuenciales (`ExistingWorkPolicy.APPEND_OR_REPLACE`) en lugar de reemplazar el trabajo activo.
-   - **Limpieza periódica de caché:** Invocar `uriFileResolver.cleanupTempFiles()` al iniciar la app si no hay trabajos activos en `WorkManager`, para limpiar residuos ante cierres inesperados.
-   - **Previsualización de archivos:** Miniaturas locales con `BitmapFactory`/`ThumbnailUtils` en `InputFileCard` e `HistoryItemCard`.
-   - **Más parámetros avanzados:** Control de bitrate explícito para audio/video, rotación/recorte de imágenes, contraseña para PDFs cifrados (PDFBox) y archivos ZIP protegidos.
-   - **Migraciones Room con esquema exportado:** Cambiar `exportSchema = true` en `AnyWallDatabase` cuando se agreguen columnas nuevas para mantener historial de migraciones seguro.
-   - **Optimización de tamaño y distribución:** Habilitar `isMinifyEnabled = true` + `isShrinkResources = true` con pruebas completas sobre `proguard-rules.pro`, automatizar GitHub Actions para releases firmados y generar App Bundle (`.aab`).

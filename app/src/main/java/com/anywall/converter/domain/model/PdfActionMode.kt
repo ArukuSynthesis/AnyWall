@@ -1,7 +1,7 @@
 package com.anywall.converter.domain.model
 
 /**
- * Modos de operación especializada sobre archivos PDF.
+ * Modos de operación especializada sobre archivos PDF (v0.2).
  */
 enum class PdfActionMode(val labelEs: String, val descriptionEs: String) {
     MERGE_OR_CONVERT(
@@ -19,6 +19,14 @@ enum class PdfActionMode(val labelEs: String, val descriptionEs: String) {
     OPTIMIZE_COMPRESS(
         labelEs = "Optimizar y comprimir PDF",
         descriptionEs = "Reescribe y comprime las páginas del PDF según el porcentaje de calidad seleccionado"
+    ),
+    PROTECT_PASSWORD(
+        labelEs = "Proteger con contraseña",
+        descriptionEs = "Cifra el documento PDF localmente con contraseña mediante estándar PDFBox"
+    ),
+    UNLOCK_PASSWORD(
+        labelEs = "Desbloquear PDF",
+        descriptionEs = "Elimina la protección por contraseña de un PDF proporcionando su clave actual"
     );
 
     companion object {

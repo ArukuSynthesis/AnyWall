@@ -17,10 +17,15 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Checklist
 import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.SelectAll
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -45,31 +50,40 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.anywall.converter.core.FileShareHelper
+import com.anywall.converter.core.LocalThumbnailLoader
 import com.anywall.converter.domain.model.FormatCategory
 import com.anywall.converter.domain.model.HistoryRecord
 import com.anywall.converter.ui.components.HistoryItemCard
 
 /**
- * `HistoryScreen`:
- * - Lista persistente conectada a Room con filtro por categoría, búsqueda por nombre/formato,
- *   fecha, peso final y botones directos para **Abrir** (`Intent.ACTION_VIEW`),
- *   **Compartir** (`Intent.ACTION_SEND` con `FileProvider`) y **Eliminar** del historial y almacenamiento.
+ * `HistoryScreen` (v0.2):
+ * - Lista persistente conectada a Room con miniaturas locales, insignia de ahorro de peso (`Antes → Después, -62%`),
+ *   filtro por categoría, búsqueda por nombre/formato y modo de **Selección Múltiple** para compartir
+ *   varios archivos a la vez (`ACTION_SEND_MULTIPLE`) o eliminarlos en lote.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HistoryScreen(
     records: List<HistoryRecord>,
+    thumbnailLoader: LocalThumbnailLoader?,
     selectedCategory: FormatCategory?,
     searchQuery: String,
     onSelectCategory: (FormatCategory?) -> Unit,
     onSearchQueryChange: (String) -> Unit,
     onDeleteRecord: (HistoryRecord) -> Unit,
+    onDeleteSelectedRecords: (List<HistoryRecord>) -> Unit,
     onClearAllHistory: () -> Unit,
     onNavigateBack: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
     var showClearAllDialog by remember { mutableStateOf(false) }
+    var isSelectionMode by remember { mutableStateOf(false) }
+    var selectedIds by remember { mutableStateOf(setOf<Long>()) }
+
+    val selectedRecords = remember(records, selectedIds) {
+        records.filter { it.id in selectedIds }
+    }
 
     if (showClearAllDialog) {
         AlertDialog(
@@ -84,6 +98,8 @@ fun HistoryScreen(
                 Button(
                     onClick = {
                         showClearAllDialog = false
+                        isSelectionMode = false
+                        selectedIds = emptySet()
                         onClearAllHistory()
                     },
                     colors = ButtonDefaults.buttonColors(
@@ -104,41 +120,122 @@ fun HistoryScreen(
     Scaffold(
         modifier = modifier.fillMaxSize(),
         topBar = {
-            TopAppBar(
-                title = {
-                    Column {
+            if (isSelectionMode) {
+                TopAppBar(
+                    title = {
                         Text(
-                            text = "Historial de Conversiones",
+                            text = "${selectedIds.size} seleccionados",
                             style = MaterialTheme.typography.titleLarge,
                             fontWeight = FontWeight.Bold
                         )
-                        Text(
-                            text = "Carpeta: Downloads/AnyWall/ • ${records.size} ${if (records.size == 1) "archivo" else "archivos"}",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                },
-                navigationIcon = {
-                    IconButton(onClick = onNavigateBack) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = "Volver"
-                        )
-                    }
-                },
-                actions = {
-                    if (records.isNotEmpty()) {
-                        IconButton(onClick = { showClearAllDialog = true }) {
+                    },
+                    navigationIcon = {
+                        IconButton(
+                            onClick = {
+                                isSelectionMode = false
+                                selectedIds = emptySet()
+                            }
+                        ) {
                             Icon(
-                                imageVector = Icons.Default.DeleteSweep,
-                                contentDescription = "Vaciar todo el historial",
+                                imageVector = Icons.Default.Close,
+                                contentDescription = "Salir de selección múltiple"
+                            )
+                        }
+                    },
+                    actions = {
+                        IconButton(
+                            onClick = {
+                                selectedIds = if (selectedIds.size == records.size) {
+                                    emptySet()
+                                } else {
+                                    records.map { it.id }.toSet()
+                                }
+                            }
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.SelectAll,
+                                contentDescription = "Seleccionar todos"
+                            )
+                        }
+                        IconButton(
+                            onClick = {
+                                if (selectedRecords.isNotEmpty()) {
+                                    FileShareHelper.shareMultipleConvertedFiles(context, selectedRecords)
+                                }
+                            },
+                            enabled = selectedRecords.isNotEmpty()
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Share,
+                                contentDescription = "Compartir seleccionados"
+                            )
+                        }
+                        IconButton(
+                            onClick = {
+                                if (selectedRecords.isNotEmpty()) {
+                                    onDeleteSelectedRecords(selectedRecords)
+                                    selectedIds = emptySet()
+                                    isSelectionMode = false
+                                }
+                            },
+                            enabled = selectedRecords.isNotEmpty()
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.DeleteOutline,
+                                contentDescription = "Eliminar seleccionados",
                                 tint = MaterialTheme.colorScheme.error
                             )
                         }
                     }
-                }
-            )
+                )
+            } else {
+                TopAppBar(
+                    title = {
+                        Column {
+                            Text(
+                                text = "Historial de Conversiones",
+                                style = MaterialTheme.typography.titleLarge,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = "Carpeta: Downloads/AnyWall/ • ${records.size} ${if (records.size == 1) "archivo" else "archivos"}",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    },
+                    navigationIcon = {
+                        IconButton(onClick = onNavigateBack) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                                contentDescription = "Volver"
+                            )
+                        }
+                    },
+                    actions = {
+                        if (records.isNotEmpty()) {
+                            IconButton(
+                                onClick = {
+                                    isSelectionMode = true
+                                    selectedIds = emptySet()
+                                }
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Checklist,
+                                    contentDescription = "Selección múltiple"
+                                )
+                            }
+                            IconButton(onClick = { showClearAllDialog = true }) {
+                                Icon(
+                                    imageVector = Icons.Default.DeleteSweep,
+                                    contentDescription = "Vaciar todo el historial",
+                                    tint = MaterialTheme.colorScheme.error
+                                )
+                            }
+                        }
+                    }
+                )
+            }
         }
     ) { innerPadding ->
         Column(
@@ -146,7 +243,6 @@ fun HistoryScreen(
                 .fillMaxSize()
                 .padding(innerPadding)
         ) {
-            // Buscador por nombre o formato
             OutlinedTextField(
                 value = searchQuery,
                 onValueChange = onSearchQueryChange,
@@ -155,7 +251,7 @@ fun HistoryScreen(
                     .padding(horizontal = 16.dp, vertical = 6.dp),
                 singleLine = true,
                 shape = RoundedCornerShape(14.dp),
-                placeholder = { Text("Buscar por nombre o formato (ej. PDF, MP4, ZIP)…") },
+                placeholder = { Text("Buscar por nombre o formato (ej. PDF, MP4, TAR.XZ)…") },
                 leadingIcon = {
                     Icon(imageVector = Icons.Default.Search, contentDescription = null)
                 },
@@ -168,7 +264,6 @@ fun HistoryScreen(
                 }
             )
 
-            // Filtros por categoría
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -229,8 +324,19 @@ fun HistoryScreen(
                         items = records,
                         key = { it.id }
                     ) { record ->
+                        val isSelected = record.id in selectedIds
                         HistoryItemCard(
                             record = record,
+                            thumbnailLoader = thumbnailLoader,
+                            isSelectionMode = isSelectionMode,
+                            isSelected = isSelected,
+                            onToggleSelect = {
+                                selectedIds = if (isSelected) {
+                                    selectedIds - record.id
+                                } else {
+                                    selectedIds + record.id
+                                }
+                            },
                             onOpen = { FileShareHelper.openConvertedFile(context, record) },
                             onShare = { FileShareHelper.shareConvertedFile(context, record) },
                             onDelete = { onDeleteRecord(record) }

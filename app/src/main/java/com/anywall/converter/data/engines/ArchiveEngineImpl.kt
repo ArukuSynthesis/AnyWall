@@ -19,23 +19,29 @@ import org.apache.commons.compress.archivers.tar.TarArchiveOutputStream
 import org.apache.commons.compress.archivers.zip.ZipArchiveEntry
 import org.apache.commons.compress.archivers.zip.ZipArchiveInputStream
 import org.apache.commons.compress.archivers.zip.ZipArchiveOutputStream
+import org.apache.commons.compress.compressors.bzip2.BZip2CompressorInputStream
+import org.apache.commons.compress.compressors.bzip2.BZip2CompressorOutputStream
 import org.apache.commons.compress.compressors.gzip.GzipCompressorInputStream
 import org.apache.commons.compress.compressors.gzip.GzipCompressorOutputStream
+import org.apache.commons.compress.compressors.xz.XZCompressorInputStream
+import org.apache.commons.compress.compressors.xz.XZCompressorOutputStream
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.IOException
+import java.io.InputStream
 import java.util.zip.Deflater
 import kotlin.coroutines.coroutineContext
 
 /**
- * Motor 4: `ArchiveEngineImpl` (Archivos Comprimidos)
- * - Empaquetado de uno o múltiples archivos de cualquier tipo en un nuevo `.zip`, `.tar` o `.tar.gz`
- *   usando `Apache Commons Compress`.
- * - Extracción completa del contenido de archivos `.zip`, `.tar`, `.tar.gz`, `.gz` y `.7z`
- *   (usando `SevenZFile` + `org.tukaani:xz`) dentro de una subcarpeta organizada en `Downloads/AnyWall/`.
+ * Motor 4: `ArchiveEngineImpl` (Archivos Comprimidos - v0.2)
+ * - Empaquetado de uno o múltiples archivos de cualquier tipo en un nuevo `.zip`, `.tar`, `.tar.gz`,
+ *   `.tar.xz` o `.tar.bz2` usando `Apache Commons Compress` + `org.tukaani:xz`.
+ * - Extracción completa del contenido de archivos `.zip`, `.tar`, `.tar.gz`, `.tar.xz`, `.tar.bz2`,
+ *   `.gz`, `.xz`, `.bz2` y `.7z` (usando `SevenZFile` + `org.tukaani:xz`) dentro de una subcarpeta
+ *   organizada en `Downloads/AnyWall/` con protección estricta contra Zip-Slip.
  */
 class ArchiveEngineImpl(
     private val uriResolver: UriFileResolver,
@@ -46,18 +52,23 @@ class ArchiveEngineImpl(
         SupportedFormat.ZIP,
         SupportedFormat.TAR,
         SupportedFormat.TAR_GZ,
+        SupportedFormat.TAR_XZ,
+        SupportedFormat.TAR_BZ2,
         SupportedFormat.GZ,
+        SupportedFormat.XZ,
+        SupportedFormat.BZ2,
         SupportedFormat.SEVEN_Z
     )
 
     private val packageOutputFormats = listOf(
         SupportedFormat.ZIP,
         SupportedFormat.TAR,
-        SupportedFormat.TAR_GZ
+        SupportedFormat.TAR_GZ,
+        SupportedFormat.TAR_XZ,
+        SupportedFormat.TAR_BZ2
     )
 
     override fun canHandle(format: SupportedFormat): Boolean {
-        // ArchiveEngine puede extraer formatos comprimidos y también empaquetar cualquier archivo en ZIP/TAR/TAR.GZ
         return true
     }
 
@@ -66,12 +77,10 @@ class ArchiveEngineImpl(
         val distinct = sourceFormats.distinct()
         val targets = linkedSetOf<SupportedFormat>()
 
-        // Si todos los archivos seleccionados son comprimidos, habilitar la acción de extracción completa
         if (distinct.all { it in extractableArchiveFormats }) {
             targets.add(SupportedFormat.EXTRACT_ARCHIVE)
         }
 
-        // Cualquier conjunto de uno o múltiples archivos puede empaquetarse en ZIP, TAR o TAR.GZ
         targets.addAll(packageOutputFormats)
         return targets.toList()
     }
@@ -95,9 +104,6 @@ class ArchiveEngineImpl(
         throw IllegalArgumentException("Formato destino no soportado por ArchiveEngineImpl: $targetFormat")
     }
 
-    /**
-     * Empaqueta todos los archivos de entrada en un único archivo `.zip`, `.tar` o `.tar.gz`.
-     */
     private suspend fun packageFilesIntoArchive(
         inputs: List<InputFileItem>,
         targetFormat: SupportedFormat,
@@ -194,6 +200,38 @@ class ArchiveEngineImpl(
                     }
                 }
 
+                SupportedFormat.TAR_XZ -> {
+                    FileOutputStream(tempArchiveFile).use { fos ->
+                        BufferedOutputStream(fos, 64 * 1024).use { bos ->
+                            XZCompressorOutputStream(bos).use { xzOut ->
+                                TarArchiveOutputStream(xzOut, "UTF-8").use { tarOut ->
+                                    tarOut.setLongFileMode(TarArchiveOutputStream.LONGFILE_POSIX)
+                                    tarOut.setBigNumberMode(TarArchiveOutputStream.BIGNUMBER_POSIX)
+
+                                    writeInputsToTarStream(inputs, tarOut, ::uniqueEntryName, onProgress)
+                                    tarOut.finish()
+                                }
+                            }
+                        }
+                    }
+                }
+
+                SupportedFormat.TAR_BZ2 -> {
+                    FileOutputStream(tempArchiveFile).use { fos ->
+                        BufferedOutputStream(fos, 64 * 1024).use { bos ->
+                            BZip2CompressorOutputStream(bos).use { bz2Out ->
+                                TarArchiveOutputStream(bz2Out, "UTF-8").use { tarOut ->
+                                    tarOut.setLongFileMode(TarArchiveOutputStream.LONGFILE_POSIX)
+                                    tarOut.setBigNumberMode(TarArchiveOutputStream.BIGNUMBER_POSIX)
+
+                                    writeInputsToTarStream(inputs, tarOut, ::uniqueEntryName, onProgress)
+                                    tarOut.finish()
+                                }
+                            }
+                        }
+                    }
+                }
+
                 else -> throw IllegalArgumentException("Formato de empaquetado inválido: $targetFormat")
             }
 
@@ -216,6 +254,7 @@ class ArchiveEngineImpl(
 
             onProgress(1f, "Archivo comprimido generado: ${saved.displayName}")
             val first = inputs.first()
+            val totalSourceBytes = inputs.sumOf { it.sizeBytes }
             val sourceLabel = if (inputs.size == 1) {
                 first.displayName
             } else {
@@ -226,6 +265,7 @@ class ArchiveEngineImpl(
                 ConversionJobResult(
                     sourceDisplayName = sourceLabel,
                     sourceFormat = first.format,
+                    sourceSizeBytes = totalSourceBytes,
                     outputDisplayName = saved.displayName,
                     outputFormat = targetFormat,
                     outputCategory = FormatCategory.ARCHIVE,
@@ -254,7 +294,6 @@ class ArchiveEngineImpl(
                 "Empaquetando en TAR (${index + 1}/${inputs.size}): ${item.displayName}"
             )
 
-            // TarArchiveEntry requiere conocer el tamaño exacto antes de putArchiveEntry
             val tempCopy = uriResolver.copyUriToTempFile(item.uri, prefix = "tar_entry_", extension = "bin")
             try {
                 val entryName = uniqueEntryName(item.displayName)
@@ -273,10 +312,6 @@ class ArchiveEngineImpl(
         }
     }
 
-    /**
-     * Extrae el contenido completo de uno o múltiples archivos `.zip`, `.tar`, `.tar.gz`, `.gz` o `.7z`
-     * dentro de una subcarpeta organizada en `Downloads/AnyWall/<nombre_archivo>/`.
-     */
     private suspend fun extractAllArchives(
         inputs: List<InputFileItem>,
         options: ConversionOptions,
@@ -302,13 +337,40 @@ class ArchiveEngineImpl(
                 SupportedFormat.ZIP -> extractZipArchive(item, subFolderName) { subP, msg ->
                     onProgress((baseProgress + subP * slice).coerceIn(0f, 0.99f), msg)
                 }
-                SupportedFormat.TAR -> extractTarArchive(item, subFolderName, isGzipped = false) { subP, msg ->
+                SupportedFormat.TAR -> extractTarArchive(item, subFolderName, TarCompression.NONE) { subP, msg ->
                     onProgress((baseProgress + subP * slice).coerceIn(0f, 0.99f), msg)
                 }
-                SupportedFormat.TAR_GZ -> extractTarArchive(item, subFolderName, isGzipped = true) { subP, msg ->
+                SupportedFormat.TAR_GZ -> extractTarArchive(item, subFolderName, TarCompression.GZIP) { subP, msg ->
                     onProgress((baseProgress + subP * slice).coerceIn(0f, 0.99f), msg)
                 }
-                SupportedFormat.GZ -> extractGzipArchive(item, subFolderName) { subP, msg ->
+                SupportedFormat.TAR_XZ -> extractTarArchive(item, subFolderName, TarCompression.XZ) { subP, msg ->
+                    onProgress((baseProgress + subP * slice).coerceIn(0f, 0.99f), msg)
+                }
+                SupportedFormat.TAR_BZ2 -> extractTarArchive(item, subFolderName, TarCompression.BZIP2) { subP, msg ->
+                    onProgress((baseProgress + subP * slice).coerceIn(0f, 0.99f), msg)
+                }
+                SupportedFormat.GZ -> extractSingleCompressedStreamArchive(
+                    item = item,
+                    rootSubFolder = subFolderName,
+                    compression = TarCompression.GZIP,
+                    suffixesToStrip = listOf(".gz", ".GZ")
+                ) { subP, msg ->
+                    onProgress((baseProgress + subP * slice).coerceIn(0f, 0.99f), msg)
+                }
+                SupportedFormat.XZ -> extractSingleCompressedStreamArchive(
+                    item = item,
+                    rootSubFolder = subFolderName,
+                    compression = TarCompression.XZ,
+                    suffixesToStrip = listOf(".xz", ".XZ")
+                ) { subP, msg ->
+                    onProgress((baseProgress + subP * slice).coerceIn(0f, 0.99f), msg)
+                }
+                SupportedFormat.BZ2 -> extractSingleCompressedStreamArchive(
+                    item = item,
+                    rootSubFolder = subFolderName,
+                    compression = TarCompression.BZIP2,
+                    suffixesToStrip = listOf(".bz2", ".BZ2", ".bzip2")
+                ) { subP, msg ->
                     onProgress((baseProgress + subP * slice).coerceIn(0f, 0.99f), msg)
                 }
                 SupportedFormat.SEVEN_Z -> extractSevenZArchive(item, subFolderName) { subP, msg ->
@@ -322,6 +384,19 @@ class ArchiveEngineImpl(
 
         onProgress(1f, "Extracción completada (${allResults.size} archivos extraídos).")
         return allResults
+    }
+
+    private enum class TarCompression {
+        NONE, GZIP, XZ, BZIP2
+    }
+
+    private fun wrapWithDecompressor(input: InputStream, compression: TarCompression): InputStream {
+        return when (compression) {
+            TarCompression.NONE -> input
+            TarCompression.GZIP -> GzipCompressorInputStream(input, true)
+            TarCompression.XZ -> XZCompressorInputStream(input, true)
+            TarCompression.BZIP2 -> BZip2CompressorInputStream(input, true)
+        }
     }
 
     private suspend fun extractZipArchive(
@@ -367,7 +442,7 @@ class ArchiveEngineImpl(
     private suspend fun extractTarArchive(
         item: InputFileItem,
         rootSubFolder: String,
-        isGzipped: Boolean,
+        compression: TarCompression,
         onSubProgress: (Float, String) -> Unit
     ): List<ConversionJobResult> {
         val results = mutableListOf<ConversionJobResult>()
@@ -375,8 +450,7 @@ class ArchiveEngineImpl(
 
         uriResolver.openInputStream(item.uri).use { rawStream ->
             BufferedInputStream(rawStream, 64 * 1024).use { bis ->
-                val decompressedStream = if (isGzipped) GzipCompressorInputStream(bis, true) else bis
-                decompressedStream.use { tarSource ->
+                wrapWithDecompressor(bis, compression).use { tarSource ->
                     TarArchiveInputStream(tarSource, "UTF-8").use { tarIn ->
                         var entry = tarIn.nextEntry
                         while (entry != null) {
@@ -408,16 +482,17 @@ class ArchiveEngineImpl(
         return results
     }
 
-    private suspend fun extractGzipArchive(
+    private suspend fun extractSingleCompressedStreamArchive(
         item: InputFileItem,
         rootSubFolder: String,
+        compression: TarCompression,
+        suffixesToStrip: List<String>,
         onSubProgress: (Float, String) -> Unit
     ): List<ConversionJobResult> {
-        // Verificar primero si el .gz contiene internamente un .tar (.tar.gz con extensión .gz)
         val isInternalTar = try {
             uriResolver.openInputStream(item.uri).use { raw ->
-                GzipCompressorInputStream(BufferedInputStream(raw)).use { gzIn ->
-                    TarArchiveInputStream(gzIn).use { tarIn ->
+                wrapWithDecompressor(BufferedInputStream(raw), compression).use { decIn ->
+                    TarArchiveInputStream(decIn).use { tarIn ->
                         val firstEntry = tarIn.nextEntry
                         firstEntry != null && firstEntry.name.isNotBlank()
                     }
@@ -428,23 +503,27 @@ class ArchiveEngineImpl(
         }
 
         if (isInternalTar) {
-            return extractTarArchive(item, rootSubFolder, isGzipped = true, onSubProgress = onSubProgress)
+            return extractTarArchive(item, rootSubFolder, compression, onSubProgress)
         }
 
         onSubProgress(0.3f, "Descomprimiendo ${item.displayName}…")
-        val extractedFileName = item.displayName
-            .removeSuffix(".gz")
-            .removeSuffix(".GZ")
-            .ifBlank { "${item.baseNameWithoutExtension}_extraido" }
+        var strippedName = item.displayName
+        for (suffix in suffixesToStrip) {
+            if (strippedName.endsWith(suffix)) {
+                strippedName = strippedName.removeSuffix(suffix)
+                break
+            }
+        }
+        val extractedFileName = strippedName.ifBlank { "${item.baseNameWithoutExtension}_extraido" }
 
         return uriResolver.openInputStream(item.uri).use { rawStream ->
             BufferedInputStream(rawStream, 64 * 1024).use { bis ->
-                GzipCompressorInputStream(bis, true).use { gzipIn ->
+                wrapWithDecompressor(bis, compression).use { decIn ->
                     val savedResult = saveExtractedStreamEntry(
                         sourceArchive = item,
                         rootSubFolder = rootSubFolder,
                         rawEntryName = extractedFileName,
-                        entryInputStream = gzipIn
+                        entryInputStream = decIn
                     )
                     onSubProgress(1f, "Extraído ${savedResult.outputDisplayName}")
                     listOf(savedResult)
@@ -453,9 +532,6 @@ class ArchiveEngineImpl(
         }
     }
 
-    /**
-     * Extrae archivos `.7z` usando `SevenZFile` de Apache Commons Compress junto con `org.tukaani:xz` (LZMA/LZMA2).
-     */
     private suspend fun extractSevenZArchive(
         item: InputFileItem,
         rootSubFolder: String,
@@ -511,6 +587,7 @@ class ArchiveEngineImpl(
                                 ConversionJobResult(
                                     sourceDisplayName = item.displayName,
                                     sourceFormat = item.format,
+                                    sourceSizeBytes = item.sizeBytes,
                                     outputDisplayName = saved.displayName,
                                     outputFormat = detectedFormat,
                                     outputCategory = FormatCategory.ARCHIVE,
@@ -541,12 +618,11 @@ class ArchiveEngineImpl(
         sourceArchive: InputFileItem,
         rootSubFolder: String,
         rawEntryName: String,
-        entryInputStream: java.io.InputStream
+        entryInputStream: InputStream
     ): ConversionJobResult {
         val (nestedSubFolder, cleanFileName) = splitEntryFolderAndName(rootSubFolder, rawEntryName)
         val detectedFormat = SupportedFormat.detect(cleanFileName, null) ?: SupportedFormat.TXT
 
-        // No cerramos entryInputStream aquí porque pertenece al ArchiveInputStream padre
         val nonClosingStream = object : java.io.FilterInputStream(entryInputStream) {
             override fun close() {
                 // No-op: el bucle principal cierra el ArchiveInputStream
@@ -563,6 +639,7 @@ class ArchiveEngineImpl(
         return ConversionJobResult(
             sourceDisplayName = sourceArchive.displayName,
             sourceFormat = sourceArchive.format,
+            sourceSizeBytes = sourceArchive.sizeBytes,
             outputDisplayName = saved.displayName,
             outputFormat = detectedFormat,
             outputCategory = FormatCategory.ARCHIVE,
@@ -573,32 +650,34 @@ class ArchiveEngineImpl(
         )
     }
 
-    /**
-     * Protege contra Zip-Slip eliminando segmentos `..` y separa los subdirectorios internos
-     * del nombre final del archivo extraído dentro de `Downloads/AnyWall/<rootSubFolder>/`.
-     */
-    private fun splitEntryFolderAndName(
-        rootSubFolder: String,
-        rawEntryName: String
-    ): Pair<String, String> {
-        val segments = rawEntryName
-            .replace('\\', '/')
-            .split('/')
-            .map { it.trim() }
-            .filter { it.isNotEmpty() && it != "." && it != ".." }
-            .map { UriFileResolver.sanitizeFileName(it) }
+    companion object {
+        /**
+         * Protege contra Zip-Slip eliminando segmentos `..` y separa los subdirectorios internos
+         * del nombre final del archivo extraído dentro de `Downloads/AnyWall/<rootSubFolder>/`.
+         */
+        fun splitEntryFolderAndName(
+            rootSubFolder: String,
+            rawEntryName: String
+        ): Pair<String, String> {
+            val segments = rawEntryName
+                .replace('\\', '/')
+                .split('/')
+                .map { it.trim() }
+                .filter { it.isNotEmpty() && it != "." && it != ".." }
+                .map { UriFileResolver.sanitizeFileName(it) }
 
-        if (segments.isEmpty()) {
-            return rootSubFolder to "archivo_extraido"
-        }
+            if (segments.isEmpty()) {
+                return rootSubFolder to "archivo_extraido"
+            }
 
-        val fileName = segments.last()
-        val parentSegments = segments.dropLast(1)
-        val fullSubFolder = if (parentSegments.isEmpty()) {
-            rootSubFolder
-        } else {
-            "$rootSubFolder/${parentSegments.joinToString("/")}"
+            val fileName = segments.last()
+            val parentSegments = segments.dropLast(1)
+            val fullSubFolder = if (parentSegments.isEmpty()) {
+                rootSubFolder
+            } else {
+                "$rootSubFolder/${parentSegments.joinToString("/")}"
+            }
+            return fullSubFolder to fileName
         }
-        return fullSubFolder to fileName
     }
 }
