@@ -421,6 +421,70 @@ object PcmWavMp3AudioHelper {
     }
 
     /**
+     * Aplica una envolvente suave de entrada (Fade In) y salida (Fade Out) sobre muestras PCM 16-bit LE (v0.3).
+     */
+    @Throws(IOException::class)
+    fun applyFadeInOutToPcm16Le(
+        pcmInfo: DecodedPcmInfo,
+        fadeInSeconds: Int,
+        fadeOutSeconds: Int,
+        outputPcmFile: File
+    ): DecodedPcmInfo {
+        if (fadeInSeconds <= 0 && fadeOutSeconds <= 0) {
+            return pcmInfo
+        }
+        val channels = pcmInfo.channelCount.coerceIn(1, 2)
+        val bytesPerFrame = 2 * channels
+        val totalFrames = (pcmInfo.totalPcmBytes / bytesPerFrame).coerceAtLeast(1L)
+        val fadeInFrames = (fadeInSeconds.coerceAtLeast(0).toLong() * pcmInfo.sampleRate).coerceAtMost(totalFrames / 2)
+        val fadeOutFrames = (fadeOutSeconds.coerceAtLeast(0).toLong() * pcmInfo.sampleRate).coerceAtMost(totalFrames / 2)
+
+        FileInputStream(pcmInfo.pcmFile).use { fis ->
+            FileOutputStream(outputPcmFile).use { fos ->
+                BufferedOutputStream(fos, 64 * 1024).use { bos ->
+                    val chunkFrames = 4096
+                    val buf = ByteArray(chunkFrames * bytesPerFrame)
+                    var currentFrame = 0L
+
+                    while (true) {
+                        val read = readFullFrames(fis, buf, bytesPerFrame)
+                        if (read <= 0) break
+                        val framesInChunk = read / bytesPerFrame
+                        var byteOffset = 0
+                        for (f in 0 until framesInChunk) {
+                            val globalFrame = currentFrame + f
+                            var gain = 1.0f
+                            if (fadeInFrames > 0L && globalFrame < fadeInFrames) {
+                                gain = minOf(gain, globalFrame.toFloat() / fadeInFrames.toFloat())
+                            }
+                            val framesFromEnd = (totalFrames - 1L - globalFrame).coerceAtLeast(0L)
+                            if (fadeOutFrames > 0L && framesFromEnd < fadeOutFrames) {
+                                gain = minOf(gain, framesFromEnd.toFloat() / fadeOutFrames.toFloat())
+                            }
+                            if (gain < 0.999f) {
+                                for (c in 0 until channels) {
+                                    val idx = byteOffset + c * 2
+                                    val lo = buf[idx].toInt() and 0xFF
+                                    val hi = buf[idx + 1].toInt()
+                                    val sample = (hi shl 8) or lo
+                                    val scaled = (sample * gain).toInt().coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt())
+                                    buf[idx] = (scaled and 0xFF).toByte()
+                                    buf[idx + 1] = ((scaled shr 8) and 0xFF).toByte()
+                                }
+                            }
+                            byteOffset += bytesPerFrame
+                        }
+                        bos.write(buf, 0, read)
+                        currentFrame += framesInChunk
+                    }
+                    bos.flush()
+                }
+            }
+        }
+        return pcmInfo.copy(pcmFile = outputPcmFile)
+    }
+
+    /**
      * Codifica muestras PCM 16-bit Little-Endian a un archivo `.mp3` real usando los módulos internos
      * de `de.sciss.jump3r.mp3.Lame` (LAME 3.98.4 en Java puro, compatible al 100% con Android Runtime).
      */
@@ -429,6 +493,7 @@ object PcmWavMp3AudioHelper {
         pcmInfo: DecodedPcmInfo,
         outputMp3File: File,
         qualityPercent: Int,
+        explicitBitrateKbps: Int? = null,
         onProgress: (Float) -> Unit
     ) {
         val lame = Lame()
@@ -465,7 +530,7 @@ object PcmWavMp3AudioHelper {
 
         val channels = pcmInfo.channelCount.coerceIn(1, 2)
         val sampleRate = pcmInfo.sampleRate.coerceIn(8000, 48000)
-        val bitrateKbps = when {
+        val bitrateKbps = explicitBitrateKbps?.takeIf { it in 64..320 } ?: when {
             qualityPercent >= 90 -> 256
             qualityPercent >= 75 -> 192
             qualityPercent >= 50 -> 160

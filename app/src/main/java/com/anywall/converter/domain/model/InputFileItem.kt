@@ -4,14 +4,16 @@ import android.net.Uri
 import java.util.Locale
 
 /**
- * Representa un archivo de entrada cargado por el usuario para convertir.
+ * Representa un archivo de entrada cargado por el usuario para convertir (v0.3).
+ * Incluye `relativeFolderPath` para preservar la jerarquía de subcarpetas cuando se importa un directorio SAF.
  */
 data class InputFileItem(
     val uri: Uri,
     val displayName: String,
     val sizeBytes: Long,
     val mimeType: String,
-    val format: SupportedFormat
+    val format: SupportedFormat,
+    val relativeFolderPath: String = ""
 ) {
     val baseNameWithoutExtension: String
         get() {
@@ -20,6 +22,9 @@ data class InputFileItem(
                 lower.endsWith(".tar.gz") -> displayName.dropLast(7)
                 lower.endsWith(".tar.xz") -> displayName.dropLast(7)
                 lower.endsWith(".tar.bz2") -> displayName.dropLast(8)
+                lower.endsWith(".anywall") -> displayName.dropLast(8)
+                lower.matches(Regex(".*\\.part\\d+$")) -> displayName.substringBeforeLast(".part")
+                lower.matches(Regex(".*\\.\\d{3}$")) -> displayName.dropLast(4)
                 lower.contains('.') -> displayName.substringBeforeLast('.')
                 else -> displayName
             }.ifBlank { "archivo" }

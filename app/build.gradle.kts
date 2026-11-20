@@ -13,8 +13,8 @@ android {
         applicationId = "com.anywall.converter"
         minSdk = 26
         targetSdk = 35
-        versionCode = 2
-        versionName = "0.2"
+        versionCode = 3
+        versionName = "0.3"
         vectorDrawables {
             useSupportLibrary = true
         }
@@ -110,8 +110,9 @@ dependencies {
     ksp(libs.androidx.room.compiler)
     implementation(libs.androidx.work.runtime.ktx)
 
-    // Imágenes / SVG
+    // Imágenes / SVG / QR
     implementation(libs.androidsvg)
+    implementation(libs.zxing.core)
 
     // Documentos / Office
     implementation(libs.pdfbox.android)

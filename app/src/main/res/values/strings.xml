@@ -5,4 +5,11 @@
     <string name="offline_badge">100% Offline • Privado</string>
     <string name="notification_channel_name">Conversiones de AnyWall</string>
     <string name="notification_channel_desc">Progreso en segundo plano de conversiones multimedia y documentales locales</string>
+    <string name="shortcut_convert_short">Convertir</string>
+    <string name="shortcut_convert_long">Nueva conversión offline</string>
+    <string name="shortcut_tools_short">Herramientas</string>
+    <string name="shortcut_tools_long">QR, Bóveda AES, Metadatos y Diff</string>
+    <string name="shortcut_history_short">Historial</string>
+    <string name="shortcut_history_long">Ver historial de conversiones</string>
+    <string name="quick_tile_label">AnyWall Offline</string>
 </resources>

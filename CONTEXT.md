@@ -1,6 +1,6 @@
-# AnyWall: Universal Converter — Documento de Contexto Arquitectónico (v0.2)
+# AnyWall: Universal Converter — Documento de Contexto Arquitectónico (v0.3)
 
-Este documento sirve como referencia técnica viva para futuras iteraciones, mantenimiento y evolución de **AnyWall: Universal Converter** (`com.anywall.converter`). Contiene las reglas inquebrantables, decisiones de diseño, arquitectura de paquetes, detalle de los 4 motores locales, flujos de datos y guías de compilación actualizadas a la versión **v0.2**.
+Este documento sirve como referencia técnica viva para futuras iteraciones, mantenimiento y evolución de **AnyWall: Universal Converter** (`com.anywall.converter`). Contiene las reglas inquebrantables, decisiones de diseño, arquitectura de paquetes, detalle de los 5 motores locales, flujos de datos y guías de compilación actualizadas a la versión **v0.3**.
 
 ---
 
@@ -9,10 +9,10 @@ Este documento sirve como referencia técnica viva para futuras iteraciones, man
 - **Nombre de la app:** AnyWall: Universal Converter
 - **Autor / Desarrollador:** **SynthesizerEnd** (`https://github.com/ArukuSynthesis/AnyWall`)
 - **Application ID / Namespace:** `com.anywall.converter`
-- **Versión actual:** `versionCode = 2` • `versionName = "0.2"`
-- **Idioma de la interfaz:** 100% español
-- **Propósito:** Conversor universal nativo de Android (imágenes, documentos/PDF, audio, video y archivos comprimidos) con procesamiento **100% local en el hardware del dispositivo**, sin dependencias en la nube y operable íntegramente en modo avión.
-- **Estado actual:** Versión `v0.2` completa, funcional, sin stubs ni `// TODO`, con migración de base de datos Room (`v1 -> v2`), miniaturas locales, importación de carpetas completas, modificador visual interactivo de páginas PDF en vista previa, fusión de lotes mixtos (imágenes + documentos/PDF), créditos y licencias Open Source (`AboutCreditsDialog` + `THIRD_PARTY_NOTICES.md`), cifrado/desbloqueo PDF, recorte/silenciado multimedia, soporte `.tar.xz`/`.tar.bz2`/`.heic`/`.gif` y pruebas unitarias ampliadas pasando al 100%.
+- **Versión actual:** `versionCode = 3` • `versionName = "0.3"`
+- **Idioma de la interfaz:** Bilingüe Español / Inglés (`AppLanguageMode`: `Sistema`, `Español`, `English`)
+- **Propósito:** Conversor universal nativo de Android (imágenes, documentos/PDF/XLSX/EPUB, audio, video, archivos comprimidos, datos estructurados y seguridad criptográfica) con procesamiento **100% local en el hardware del dispositivo**, sin dependencias en la nube y operable íntegramente en modo avión.
+- **Estado actual:** Versión `v0.3` completa, funcional, sin stubs ni `// TODO`, con 5 motores locales (`ImageEngineImpl`, `DocumentEngineImpl`, `MediaEngineImpl`, `ArchiveEngineImpl`, `DataAndSecurityEngineImpl`), migraciones de Room (`v1 -> v2 -> v3` con `conversion_presets`), editores visuales de PDF e Imágenes, Firma Manuscrita, Bóveda Universal `AES-256-GCM`, QR offline, Inspector Forense & `SHA-256`, Diff local, Comparador Antes/Después, File Splitter/Joiner, Pipelines de 2 pasos y suite completa de pruebas unitarias pasando al 100%.
 
 ---
 

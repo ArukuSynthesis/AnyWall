@@ -7,6 +7,7 @@ import com.anywall.converter.domain.model.ConversionJobResult
 import com.anywall.converter.domain.model.ConversionOptions
 import com.anywall.converter.domain.model.FormatCategory
 import com.anywall.converter.domain.model.InputFileItem
+import com.anywall.converter.domain.model.OutputNamingTemplateResolver
 import com.anywall.converter.domain.model.SupportedFormat
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
@@ -23,6 +24,7 @@ import org.apache.commons.compress.compressors.bzip2.BZip2CompressorInputStream
 import org.apache.commons.compress.compressors.bzip2.BZip2CompressorOutputStream
 import org.apache.commons.compress.compressors.gzip.GzipCompressorInputStream
 import org.apache.commons.compress.compressors.gzip.GzipCompressorOutputStream
+import org.apache.commons.compress.compressors.gzip.GzipParameters
 import org.apache.commons.compress.compressors.xz.XZCompressorInputStream
 import org.apache.commons.compress.compressors.xz.XZCompressorOutputStream
 import java.io.BufferedInputStream
@@ -32,16 +34,25 @@ import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.IOException
 import java.io.InputStream
-import java.util.zip.Deflater
 import kotlin.coroutines.coroutineContext
 
 /**
- * Motor 4: `ArchiveEngineImpl` (Archivos Comprimidos - v0.2)
- * - Empaquetado de uno o múltiples archivos de cualquier tipo en un nuevo `.zip`, `.tar`, `.tar.gz`,
- *   `.tar.xz` o `.tar.bz2` usando `Apache Commons Compress` + `org.tukaani:xz`.
- * - Extracción completa del contenido de archivos `.zip`, `.tar`, `.tar.gz`, `.tar.xz`, `.tar.bz2`,
- *   `.gz`, `.xz`, `.bz2` y `.7z` (usando `SevenZFile` + `org.tukaani:xz`) dentro de una subcarpeta
- *   organizada en `Downloads/AnyWall/` con protección estricta contra Zip-Slip.
+ * Entrada individual inspeccionada dentro de un archivo comprimido para `ArchivePreviewDialog` (v0.3).
+ */
+data class ArchiveEntryPreview(
+    val entryPath: String,
+    val sizeBytes: Long,
+    val isDirectory: Boolean
+)
+
+/**
+ * Motor 4: `ArchiveEngineImpl` (Archivos Comprimidos, Extracción Selectiva y File Splitter/Joiner - v0.3)
+ * - Empaquetado en `.zip`, `.tar`, `.tar.gz`, `.tar.xz` o `.tar.bz2` con selector de nivel de compresión
+ *   (`FAST`, `BALANCED`, `MAXIMUM`) y preservación opcional de subcarpetas (`relativeFolderPath`).
+ * - Inspección previa de entradas (`inspectArchiveEntries`) y extracción selectiva (`selectedArchiveEntries`)
+ *   de `.zip`, `.tar`, `.tar.gz`, `.tar.xz`, `.tar.bz2`, `.gz`, `.xz`, `.bz2` y `.7z` con protección anti-Zip-Slip.
+ * - División de archivos grandes en partes `.part001`, `.part002`... + manifiesto `SHA-256` (`FILE_PARTS`)
+ *   y reconstrucción verificada (`JOIN_PARTS`).
  */
 class ArchiveEngineImpl(
     private val uriResolver: UriFileResolver,
@@ -77,11 +88,16 @@ class ArchiveEngineImpl(
         val distinct = sourceFormats.distinct()
         val targets = linkedSetOf<SupportedFormat>()
 
+        if (distinct.any { it == SupportedFormat.FILE_PARTS }) {
+            targets.add(SupportedFormat.JOIN_PARTS)
+        }
+
         if (distinct.all { it in extractableArchiveFormats }) {
             targets.add(SupportedFormat.EXTRACT_ARCHIVE)
         }
 
         targets.addAll(packageOutputFormats)
+        targets.add(SupportedFormat.FILE_PARTS)
         return targets.toList()
     }
 
@@ -93,6 +109,14 @@ class ArchiveEngineImpl(
     ): List<ConversionJobResult> = withContext(Dispatchers.IO) {
         require(inputs.isNotEmpty()) { "No se seleccionaron archivos para procesar en ArchiveEngineImpl." }
 
+        if (targetFormat == SupportedFormat.JOIN_PARTS) {
+            return@withContext joinSplitPartFiles(inputs, options, onProgress)
+        }
+
+        if (targetFormat == SupportedFormat.FILE_PARTS) {
+            return@withContext splitInputFilesIntoParts(inputs, options, onProgress)
+        }
+
         if (targetFormat == SupportedFormat.EXTRACT_ARCHIVE) {
             return@withContext extractAllArchives(inputs, options, onProgress)
         }
@@ -102,6 +126,256 @@ class ArchiveEngineImpl(
         }
 
         throw IllegalArgumentException("Formato destino no soportado por ArchiveEngineImpl: $targetFormat")
+    }
+
+    /**
+     * Inspecciona el contenido de un archivo comprimido sin extraerlo a almacenamiento permanente,
+     * permitiendo al usuario previsualizar y elegir qué entradas extraer en `ArchivePreviewDialog`.
+     */
+    fun inspectArchiveEntries(item: InputFileItem, maxEntries: Int = 500): List<ArchiveEntryPreview> {
+        val list = mutableListOf<ArchiveEntryPreview>()
+        try {
+            when (item.format) {
+                SupportedFormat.ZIP -> {
+                    uriResolver.openInputStream(item.uri).use { raw ->
+                        ZipArchiveInputStream(BufferedInputStream(raw, 32 * 1024), "UTF-8", true, true).use { zipIn ->
+                            var entry = zipIn.nextEntry
+                            while (entry != null && list.size < maxEntries) {
+                                if (!entry.isDirectory) {
+                                    list.add(
+                                        ArchiveEntryPreview(
+                                            entryPath = entry.name,
+                                            sizeBytes = entry.size.coerceAtLeast(0L),
+                                            isDirectory = false
+                                        )
+                                    )
+                                }
+                                entry = zipIn.nextEntry
+                            }
+                        }
+                    }
+                }
+                SupportedFormat.TAR,
+                SupportedFormat.TAR_GZ,
+                SupportedFormat.TAR_XZ,
+                SupportedFormat.TAR_BZ2 -> {
+                    val comp = when (item.format) {
+                        SupportedFormat.TAR_GZ -> TarCompression.GZIP
+                        SupportedFormat.TAR_XZ -> TarCompression.XZ
+                        SupportedFormat.TAR_BZ2 -> TarCompression.BZIP2
+                        else -> TarCompression.NONE
+                    }
+                    uriResolver.openInputStream(item.uri).use { raw ->
+                        wrapWithDecompressor(BufferedInputStream(raw, 32 * 1024), comp).use { dec ->
+                            TarArchiveInputStream(dec, "UTF-8").use { tarIn ->
+                                var entry = tarIn.nextEntry
+                                while (entry != null && list.size < maxEntries) {
+                                    if (!entry.isDirectory) {
+                                        list.add(
+                                            ArchiveEntryPreview(
+                                                entryPath = entry.name,
+                                                sizeBytes = entry.size.coerceAtLeast(0L),
+                                                isDirectory = false
+                                            )
+                                        )
+                                    }
+                                    entry = tarIn.nextEntry
+                                }
+                            }
+                        }
+                    }
+                }
+                SupportedFormat.SEVEN_Z -> {
+                    val temp7z = uriResolver.copyUriToTempFile(item.uri, "inspect_7z_", "7z")
+                    try {
+                        SevenZFile.builder().setFile(temp7z).get().use { sevenZ ->
+                            for (entry in sevenZ.entries) {
+                                if (!entry.isDirectory && list.size < maxEntries) {
+                                    list.add(
+                                        ArchiveEntryPreview(
+                                            entryPath = entry.name ?: "archivo",
+                                            sizeBytes = entry.size.coerceAtLeast(0L),
+                                            isDirectory = false
+                                        )
+                                    )
+                                }
+                            }
+                        }
+                    } finally {
+                        temp7z.delete()
+                    }
+                }
+                else -> {
+                    list.add(
+                        ArchiveEntryPreview(
+                            entryPath = item.baseNameWithoutExtension,
+                            sizeBytes = item.sizeBytes,
+                            isDirectory = false
+                        )
+                    )
+                }
+            }
+        } catch (_: Throwable) {
+        }
+        return list
+    }
+
+    private suspend fun splitInputFilesIntoParts(
+        inputs: List<InputFileItem>,
+        options: ConversionOptions,
+        onProgress: (Float, String) -> Unit
+    ): List<ConversionJobResult> {
+        val results = mutableListOf<ConversionJobResult>()
+        val partSizeBytes = options.fileSplitPartSizeMb.coerceIn(1, 500).toLong() * 1024L * 1024L
+        val total = inputs.size
+
+        inputs.forEachIndexed { idx, item ->
+            coroutineContext.ensureActive()
+            onProgress(
+                idx.toFloat() / total.toFloat(),
+                "Dividiendo ${item.displayName} en partes de ${options.fileSplitPartSizeMb} MB…"
+            )
+            val tempSrc = uriResolver.copyUriToTempFile(item.uri, "split_in_", item.format.extension)
+            val workDir = File(uriResolver.getWorkingTempDir(), "parts_${System.currentTimeMillis()}")
+            try {
+                val splitRes = FileSplitterAndJoiner.splitFileIntoParts(
+                    sourceFile = tempSrc,
+                    originalFileName = item.displayName,
+                    outputDir = workDir,
+                    maxPartSizeBytes = partSizeBytes
+                )
+                val subFolder = "${item.baseNameWithoutExtension}_partes"
+                val approxSourcePerPart = (item.sizeBytes / splitRes.partFiles.size.coerceAtLeast(1)).coerceAtLeast(1L)
+
+                for (partFile in splitRes.partFiles) {
+                    val savedPart = storageManager.saveTempFileToDownloads(
+                        sourceFile = partFile,
+                        desiredDisplayName = partFile.name,
+                        mimeType = SupportedFormat.FILE_PARTS.mimeType,
+                        subFolder = subFolder
+                    )
+                    results.add(
+                        ConversionJobResult(
+                            sourceDisplayName = item.displayName,
+                            sourceFormat = item.format,
+                            sourceSizeBytes = approxSourcePerPart,
+                            outputDisplayName = savedPart.displayName,
+                            outputFormat = SupportedFormat.FILE_PARTS,
+                            outputCategory = FormatCategory.ARCHIVE,
+                            outputUri = savedPart.uri,
+                            outputAbsolutePath = savedPart.absolutePath,
+                            outputSizeBytes = savedPart.sizeBytes,
+                            outputMimeType = savedPart.mimeType
+                        )
+                    )
+                }
+
+                // Guardar también el manifiesto SHA-256 verificable
+                val savedManifest = storageManager.saveTempFileToDownloads(
+                    sourceFile = splitRes.manifestFile,
+                    desiredDisplayName = splitRes.manifestFile.name,
+                    mimeType = "text/plain",
+                    subFolder = subFolder
+                )
+                results.add(
+                    ConversionJobResult(
+                        sourceDisplayName = "${item.displayName} (Manifiesto SHA-256)",
+                        sourceFormat = item.format,
+                        sourceSizeBytes = savedManifest.sizeBytes,
+                        outputDisplayName = savedManifest.displayName,
+                        outputFormat = SupportedFormat.TXT,
+                        outputCategory = FormatCategory.ARCHIVE,
+                        outputUri = savedManifest.uri,
+                        outputAbsolutePath = savedManifest.absolutePath,
+                        outputSizeBytes = savedManifest.sizeBytes,
+                        outputMimeType = savedManifest.mimeType
+                    )
+                )
+            } finally {
+                tempSrc.delete()
+                workDir.deleteRecursively()
+            }
+        }
+        onProgress(1f, "Archivo dividido en partes con manifiesto SHA-256.")
+        return results
+    }
+
+    private suspend fun joinSplitPartFiles(
+        inputs: List<InputFileItem>,
+        options: ConversionOptions,
+        onProgress: (Float, String) -> Unit
+    ): List<ConversionJobResult> {
+        val manifestItem = inputs.firstOrNull {
+            it.displayName.endsWith(".anywall-parts.txt", ignoreCase = true)
+        }
+        val expectedSha256 = manifestItem?.let { mItem ->
+            val manifestText = uriResolver.openInputStream(mItem.uri).use {
+                it.bufferedReader(Charsets.UTF_8).readText()
+            }
+            FileSplitterAndJoiner.parseExpectedSha256FromManifest(manifestText)
+        }
+
+        val partItems = inputs.filter { it != manifestItem }
+        require(partItems.isNotEmpty()) { "Selecciona los archivos .part001, .part002... para reconstruir." }
+
+        val tempParts = mutableListOf<File>()
+        val tempJoined = uriResolver.createTempWorkingFile("joined_", "bin")
+        try {
+            partItems.forEachIndexed { idx, item ->
+                coroutineContext.ensureActive()
+                onProgress(
+                    (idx.toFloat() / partItems.size.toFloat()) * 0.6f,
+                    "Preparando parte ${idx + 1} de ${partItems.size}: ${item.displayName}"
+                )
+                val destPart = File(uriResolver.getWorkingTempDir(), item.displayName)
+                uriResolver.openInputStream(item.uri).use { input ->
+                    FileOutputStream(destPart).use { output ->
+                        input.copyTo(output, 64 * 1024)
+                    }
+                }
+                tempParts.add(destPart)
+            }
+
+            onProgress(0.75f, "Reconstruyendo archivo original y verificando integridad SHA-256…")
+            val joinResult = FileSplitterAndJoiner.joinPartFiles(
+                partFiles = tempParts,
+                outputFile = tempJoined,
+                expectedSha256Hex = expectedSha256
+            )
+
+            val desiredName = if (options.customOutputBaseName.isNotBlank()) {
+                val ext = joinResult.originalFileName.substringAfterLast('.', "bin")
+                UriFileResolver.buildOutputFileName(options.customOutputBaseName, ext)
+            } else {
+                joinResult.originalFileName
+            }
+            val detectedFmt = SupportedFormat.detect(desiredName, null) ?: SupportedFormat.ZIP
+
+            val saved = storageManager.saveTempFileToDownloads(
+                sourceFile = tempJoined,
+                desiredDisplayName = desiredName,
+                mimeType = detectedFmt.mimeType
+            )
+
+            onProgress(1f, "Archivo reconstruido y verificado: ${saved.displayName}")
+            return listOf(
+                ConversionJobResult(
+                    sourceDisplayName = "${partItems.first().displayName} (+${partItems.size - 1} partes)",
+                    sourceFormat = SupportedFormat.FILE_PARTS,
+                    sourceSizeBytes = partItems.sumOf { it.sizeBytes },
+                    outputDisplayName = saved.displayName,
+                    outputFormat = detectedFmt,
+                    outputCategory = detectedFmt.category,
+                    outputUri = saved.uri,
+                    outputAbsolutePath = saved.absolutePath,
+                    outputSizeBytes = saved.sizeBytes,
+                    outputMimeType = saved.mimeType
+                )
+            )
+        } finally {
+            tempParts.forEach { it.delete() }
+            tempJoined.delete()
+        }
     }
 
     private suspend fun packageFilesIntoArchive(
@@ -116,32 +390,39 @@ class ArchiveEngineImpl(
         )
 
         val usedEntryNames = mutableSetOf<String>()
-        fun uniqueEntryName(original: String): String {
-            val clean = UriFileResolver.sanitizeFileName(original)
-            if (usedEntryNames.add(clean)) return clean
-            val base = clean.substringBeforeLast('.', clean)
-            val ext = clean.substringAfterLast('.', "")
+        fun uniqueEntryName(item: InputFileItem): String {
+            val cleanFile = UriFileResolver.sanitizeFileName(item.displayName)
+            val prefix = if (options.preserveSubfolderStructure && item.relativeFolderPath.isNotBlank()) {
+                item.relativeFolderPath
+                    .split('/', '\\')
+                    .map { UriFileResolver.sanitizeFileName(it) }
+                    .filter { it.isNotBlank() }
+                    .joinToString("/") + "/"
+            } else {
+                ""
+            }
+            val fullCandidate = "$prefix$cleanFile"
+            if (usedEntryNames.add(fullCandidate)) return fullCandidate
+            val base = cleanFile.substringBeforeLast('.', cleanFile)
+            val ext = cleanFile.substringAfterLast('.', "")
             var counter = 2
             while (true) {
-                val candidate = if (ext.isNotEmpty()) "${base}_$counter.$ext" else "${base}_$counter"
+                val candidate = if (ext.isNotEmpty()) "$prefix${base}_$counter.$ext" else "$prefix${base}_$counter"
                 if (usedEntryNames.add(candidate)) return candidate
                 counter++
             }
         }
 
+        val compLevel = options.archiveCompressionLevel
+
         try {
             when (targetFormat) {
                 SupportedFormat.ZIP -> {
-                    val compressionLevel = when {
-                        options.clampedQuality >= 90 -> Deflater.BEST_COMPRESSION
-                        options.clampedQuality >= 50 -> Deflater.DEFAULT_COMPRESSION
-                        else -> Deflater.BEST_SPEED
-                    }
                     FileOutputStream(tempArchiveFile).use { fos ->
                         BufferedOutputStream(fos, 64 * 1024).use { bos ->
                             ZipArchiveOutputStream(bos).use { zipOut ->
                                 zipOut.setEncoding("UTF-8")
-                                zipOut.setLevel(compressionLevel)
+                                zipOut.setLevel(compLevel.zipLevel)
 
                                 inputs.forEachIndexed { index, item ->
                                     coroutineContext.ensureActive()
@@ -151,7 +432,7 @@ class ArchiveEngineImpl(
                                         "Empaquetando en ZIP (${index + 1}/${inputs.size}): ${item.displayName}"
                                     )
 
-                                    val entryName = uniqueEntryName(item.displayName)
+                                    val entryName = uniqueEntryName(item)
                                     val entry = ZipArchiveEntry(entryName).apply {
                                         time = System.currentTimeMillis()
                                         if (item.sizeBytes > 0L) {
@@ -185,9 +466,12 @@ class ArchiveEngineImpl(
                 }
 
                 SupportedFormat.TAR_GZ -> {
+                    val gzParams = GzipParameters().apply {
+                        compressionLevel = compLevel.zipLevel
+                    }
                     FileOutputStream(tempArchiveFile).use { fos ->
                         BufferedOutputStream(fos, 64 * 1024).use { bos ->
-                            GzipCompressorOutputStream(bos).use { gzipOut ->
+                            GzipCompressorOutputStream(bos, gzParams).use { gzipOut ->
                                 TarArchiveOutputStream(gzipOut, "UTF-8").use { tarOut ->
                                     tarOut.setLongFileMode(TarArchiveOutputStream.LONGFILE_POSIX)
                                     tarOut.setBigNumberMode(TarArchiveOutputStream.BIGNUMBER_POSIX)
@@ -203,7 +487,7 @@ class ArchiveEngineImpl(
                 SupportedFormat.TAR_XZ -> {
                     FileOutputStream(tempArchiveFile).use { fos ->
                         BufferedOutputStream(fos, 64 * 1024).use { bos ->
-                            XZCompressorOutputStream(bos).use { xzOut ->
+                            XZCompressorOutputStream(bos, compLevel.xzPreset).use { xzOut ->
                                 TarArchiveOutputStream(xzOut, "UTF-8").use { tarOut ->
                                     tarOut.setLongFileMode(TarArchiveOutputStream.LONGFILE_POSIX)
                                     tarOut.setBigNumberMode(TarArchiveOutputStream.BIGNUMBER_POSIX)
@@ -219,7 +503,7 @@ class ArchiveEngineImpl(
                 SupportedFormat.TAR_BZ2 -> {
                     FileOutputStream(tempArchiveFile).use { fos ->
                         BufferedOutputStream(fos, 64 * 1024).use { bos ->
-                            BZip2CompressorOutputStream(bos).use { bz2Out ->
+                            BZip2CompressorOutputStream(bos, compLevel.zipLevel.coerceIn(1, 9)).use { bz2Out ->
                                 TarArchiveOutputStream(bz2Out, "UTF-8").use { tarOut ->
                                     tarOut.setLongFileMode(TarArchiveOutputStream.LONGFILE_POSIX)
                                     tarOut.setBigNumberMode(TarArchiveOutputStream.BIGNUMBER_POSIX)
@@ -235,10 +519,17 @@ class ArchiveEngineImpl(
                 else -> throw IllegalArgumentException("Formato de empaquetado inválido: $targetFormat")
             }
 
+            val first = inputs.first()
             val baseName = when {
-                options.customOutputBaseName.isNotBlank() -> options.customOutputBaseName
-                inputs.size == 1 -> inputs.first().baseNameWithoutExtension
-                else -> "${inputs.first().baseNameWithoutExtension}_lote_${inputs.size}"
+                options.customOutputBaseName.isNotBlank() -> OutputNamingTemplateResolver.resolveBaseName(
+                    templateOrCustomName = options.customOutputBaseName,
+                    originalBaseName = first.baseNameWithoutExtension,
+                    batchIndexOneBased = 1,
+                    batchTotalCount = 1,
+                    targetFormat = targetFormat
+                )
+                inputs.size == 1 -> first.baseNameWithoutExtension
+                else -> "${first.baseNameWithoutExtension}_lote_${inputs.size}"
             }
             val desiredFileName = UriFileResolver.buildOutputFileName(
                 baseName = baseName,
@@ -253,7 +544,6 @@ class ArchiveEngineImpl(
             )
 
             onProgress(1f, "Archivo comprimido generado: ${saved.displayName}")
-            val first = inputs.first()
             val totalSourceBytes = inputs.sumOf { it.sizeBytes }
             val sourceLabel = if (inputs.size == 1) {
                 first.displayName
@@ -283,7 +573,7 @@ class ArchiveEngineImpl(
     private suspend fun writeInputsToTarStream(
         inputs: List<InputFileItem>,
         tarOut: TarArchiveOutputStream,
-        uniqueEntryName: (String) -> String,
+        uniqueEntryName: (InputFileItem) -> String,
         onProgress: (Float, String) -> Unit
     ) {
         inputs.forEachIndexed { index, item ->
@@ -296,7 +586,7 @@ class ArchiveEngineImpl(
 
             val tempCopy = uriResolver.copyUriToTempFile(item.uri, prefix = "tar_entry_", extension = "bin")
             try {
-                val entryName = uniqueEntryName(item.displayName)
+                val entryName = uniqueEntryName(item)
                 val entry = TarArchiveEntry(tempCopy, entryName).apply {
                     size = tempCopy.length()
                     modTime = java.util.Date(System.currentTimeMillis())
@@ -319,6 +609,7 @@ class ArchiveEngineImpl(
     ): List<ConversionJobResult> {
         val allResults = mutableListOf<ConversionJobResult>()
         val totalArchives = inputs.size
+        val selectedEntries = options.selectedArchiveEntries
 
         inputs.forEachIndexed { archiveIdx, item ->
             coroutineContext.ensureActive()
@@ -334,26 +625,27 @@ class ArchiveEngineImpl(
             onProgress(baseProgress, "Extrayendo ${item.displayName} en Downloads/AnyWall/$subFolderName/…")
 
             val extractedForArchive = when (item.format) {
-                SupportedFormat.ZIP -> extractZipArchive(item, subFolderName) { subP, msg ->
+                SupportedFormat.ZIP -> extractZipArchive(item, subFolderName, selectedEntries) { subP, msg ->
                     onProgress((baseProgress + subP * slice).coerceIn(0f, 0.99f), msg)
                 }
-                SupportedFormat.TAR -> extractTarArchive(item, subFolderName, TarCompression.NONE) { subP, msg ->
+                SupportedFormat.TAR -> extractTarArchive(item, subFolderName, TarCompression.NONE, selectedEntries) { subP, msg ->
                     onProgress((baseProgress + subP * slice).coerceIn(0f, 0.99f), msg)
                 }
-                SupportedFormat.TAR_GZ -> extractTarArchive(item, subFolderName, TarCompression.GZIP) { subP, msg ->
+                SupportedFormat.TAR_GZ -> extractTarArchive(item, subFolderName, TarCompression.GZIP, selectedEntries) { subP, msg ->
                     onProgress((baseProgress + subP * slice).coerceIn(0f, 0.99f), msg)
                 }
-                SupportedFormat.TAR_XZ -> extractTarArchive(item, subFolderName, TarCompression.XZ) { subP, msg ->
+                SupportedFormat.TAR_XZ -> extractTarArchive(item, subFolderName, TarCompression.XZ, selectedEntries) { subP, msg ->
                     onProgress((baseProgress + subP * slice).coerceIn(0f, 0.99f), msg)
                 }
-                SupportedFormat.TAR_BZ2 -> extractTarArchive(item, subFolderName, TarCompression.BZIP2) { subP, msg ->
+                SupportedFormat.TAR_BZ2 -> extractTarArchive(item, subFolderName, TarCompression.BZIP2, selectedEntries) { subP, msg ->
                     onProgress((baseProgress + subP * slice).coerceIn(0f, 0.99f), msg)
                 }
                 SupportedFormat.GZ -> extractSingleCompressedStreamArchive(
                     item = item,
                     rootSubFolder = subFolderName,
                     compression = TarCompression.GZIP,
-                    suffixesToStrip = listOf(".gz", ".GZ")
+                    suffixesToStrip = listOf(".gz", ".GZ"),
+                    selectedEntries = selectedEntries
                 ) { subP, msg ->
                     onProgress((baseProgress + subP * slice).coerceIn(0f, 0.99f), msg)
                 }
@@ -361,7 +653,8 @@ class ArchiveEngineImpl(
                     item = item,
                     rootSubFolder = subFolderName,
                     compression = TarCompression.XZ,
-                    suffixesToStrip = listOf(".xz", ".XZ")
+                    suffixesToStrip = listOf(".xz", ".XZ"),
+                    selectedEntries = selectedEntries
                 ) { subP, msg ->
                     onProgress((baseProgress + subP * slice).coerceIn(0f, 0.99f), msg)
                 }
@@ -369,11 +662,12 @@ class ArchiveEngineImpl(
                     item = item,
                     rootSubFolder = subFolderName,
                     compression = TarCompression.BZIP2,
-                    suffixesToStrip = listOf(".bz2", ".BZ2", ".bzip2")
+                    suffixesToStrip = listOf(".bz2", ".BZ2", ".bzip2"),
+                    selectedEntries = selectedEntries
                 ) { subP, msg ->
                     onProgress((baseProgress + subP * slice).coerceIn(0f, 0.99f), msg)
                 }
-                SupportedFormat.SEVEN_Z -> extractSevenZArchive(item, subFolderName) { subP, msg ->
+                SupportedFormat.SEVEN_Z -> extractSevenZArchive(item, subFolderName, selectedEntries) { subP, msg ->
                     onProgress((baseProgress + subP * slice).coerceIn(0f, 0.99f), msg)
                 }
                 else -> throw IllegalArgumentException("Formato no soportado para extracción: ${item.format}")
@@ -399,9 +693,15 @@ class ArchiveEngineImpl(
         }
     }
 
+    private fun shouldExtractEntry(entryName: String, selectedEntries: Set<String>): Boolean {
+        if (selectedEntries.isEmpty()) return true
+        return entryName in selectedEntries
+    }
+
     private suspend fun extractZipArchive(
         item: InputFileItem,
         rootSubFolder: String,
+        selectedEntries: Set<String>,
         onSubProgress: (Float, String) -> Unit
     ): List<ConversionJobResult> {
         val results = mutableListOf<ConversionJobResult>()
@@ -413,7 +713,7 @@ class ArchiveEngineImpl(
                     var entry = zipIn.nextEntry
                     while (entry != null) {
                         coroutineContext.ensureActive()
-                        if (!entry.isDirectory) {
+                        if (!entry.isDirectory && shouldExtractEntry(entry.name, selectedEntries)) {
                             count++
                             onSubProgress(
                                 (count.toFloat() / (count + 4).toFloat()).coerceIn(0.05f, 0.95f),
@@ -434,7 +734,7 @@ class ArchiveEngineImpl(
         }
 
         if (results.isEmpty()) {
-            throw IOException("El archivo ZIP '${item.displayName}' no contiene archivos extraíbles.")
+            throw IOException("El archivo ZIP '${item.displayName}' no contiene archivos extraíbles seleccionados.")
         }
         return results
     }
@@ -443,6 +743,7 @@ class ArchiveEngineImpl(
         item: InputFileItem,
         rootSubFolder: String,
         compression: TarCompression,
+        selectedEntries: Set<String>,
         onSubProgress: (Float, String) -> Unit
     ): List<ConversionJobResult> {
         val results = mutableListOf<ConversionJobResult>()
@@ -455,7 +756,7 @@ class ArchiveEngineImpl(
                         var entry = tarIn.nextEntry
                         while (entry != null) {
                             coroutineContext.ensureActive()
-                            if (!entry.isDirectory) {
+                            if (!entry.isDirectory && shouldExtractEntry(entry.name, selectedEntries)) {
                                 count++
                                 onSubProgress(
                                     (count.toFloat() / (count + 4).toFloat()).coerceIn(0.05f, 0.95f),
@@ -477,7 +778,7 @@ class ArchiveEngineImpl(
         }
 
         if (results.isEmpty()) {
-            throw IOException("El archivo TAR '${item.displayName}' no contiene archivos extraíbles.")
+            throw IOException("El archivo TAR '${item.displayName}' no contiene archivos extraíbles seleccionados.")
         }
         return results
     }
@@ -487,6 +788,7 @@ class ArchiveEngineImpl(
         rootSubFolder: String,
         compression: TarCompression,
         suffixesToStrip: List<String>,
+        selectedEntries: Set<String>,
         onSubProgress: (Float, String) -> Unit
     ): List<ConversionJobResult> {
         val isInternalTar = try {
@@ -503,7 +805,7 @@ class ArchiveEngineImpl(
         }
 
         if (isInternalTar) {
-            return extractTarArchive(item, rootSubFolder, compression, onSubProgress)
+            return extractTarArchive(item, rootSubFolder, compression, selectedEntries, onSubProgress)
         }
 
         onSubProgress(0.3f, "Descomprimiendo ${item.displayName}…")
@@ -535,6 +837,7 @@ class ArchiveEngineImpl(
     private suspend fun extractSevenZArchive(
         item: InputFileItem,
         rootSubFolder: String,
+        selectedEntries: Set<String>,
         onSubProgress: (Float, String) -> Unit
     ): List<ConversionJobResult> {
         val temp7z = uriResolver.copyUriToTempFile(item.uri, prefix = "archive_7z_", extension = "7z")
@@ -549,10 +852,10 @@ class ArchiveEngineImpl(
                 var entry: SevenZArchiveEntry? = sevenZFile.nextEntry
                 while (entry != null) {
                     coroutineContext.ensureActive()
-                    if (!entry.isDirectory) {
+                    val entryName = entry.name ?: "archivo_${currentIdx + 1}"
+                    if (!entry.isDirectory && shouldExtractEntry(entryName, selectedEntries)) {
                         currentIdx++
                         val p = (currentIdx.toFloat() / entriesCount.toFloat()).coerceIn(0f, 0.98f)
-                        val entryName = entry.name ?: "archivo_$currentIdx"
                         onSubProgress(p, "Extrayendo 7Z ($currentIdx/$entriesCount): $entryName")
 
                         val (nestedSubFolder, cleanFileName) = splitEntryFolderAndName(
@@ -600,6 +903,11 @@ class ArchiveEngineImpl(
                         } finally {
                             tempEntryFile.delete()
                         }
+                    } else if (!entry.isDirectory) {
+                        // Drenar entrada omitida para avanzar puntero de SevenZFile
+                        while (sevenZFile.read(buffer, 0, buffer.size) > 0) {
+                            coroutineContext.ensureActive()
+                        }
                     }
                     entry = sevenZFile.nextEntry
                 }
@@ -609,7 +917,7 @@ class ArchiveEngineImpl(
         }
 
         if (results.isEmpty()) {
-            throw IOException("El archivo 7Z '${item.displayName}' no contiene archivos extraíbles.")
+            throw IOException("El archivo 7Z '${item.displayName}' no contiene archivos extraíbles seleccionados.")
         }
         return results
     }

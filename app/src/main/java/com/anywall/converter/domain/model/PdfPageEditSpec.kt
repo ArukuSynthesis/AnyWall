@@ -2,11 +2,70 @@ package com.anywall.converter.domain.model
 
 import java.net.URLDecoder
 import java.net.URLEncoder
+import java.util.Locale
 
 /**
- * Especificación individual de edición visual de una página de PDF en vista previa (v0.2).
- * Permite reordenar páginas entre uno o varios PDFs, rotar páginas individuales (0°, 90°, 180°, 270°)
- * y excluir/incluir páginas específicas antes de generar el archivo final.
+ * Rectángulo normalizado `[0.0 .. 1.0]` de censura o pixelado aplicable sobre una página PDF o una imagen (v0.3).
+ */
+data class NormalizedRedactionBox(
+    val left: Float,
+    val top: Float,
+    val right: Float,
+    val bottom: Float,
+    val isPixelated: Boolean = false
+) {
+    val clampedLeft: Float get() = minOf(left, right).coerceIn(0f, 1f)
+    val clampedTop: Float get() = minOf(top, bottom).coerceIn(0f, 1f)
+    val clampedRight: Float get() = maxOf(left, right).coerceIn(0f, 1f)
+    val clampedBottom: Float get() = maxOf(top, bottom).coerceIn(0f, 1f)
+
+    fun toToken(): String {
+        return String.format(
+            Locale.US,
+            "%.4f,%.4f,%.4f,%.4f,%d",
+            clampedLeft,
+            clampedTop,
+            clampedRight,
+            clampedBottom,
+            if (isPixelated) 1 else 0
+        )
+    }
+
+    companion object {
+        fun fromToken(token: String): NormalizedRedactionBox? {
+            val parts = token.split(',')
+            if (parts.size < 4) return null
+            val l = parts[0].toFloatOrNull() ?: return null
+            val t = parts[1].toFloatOrNull() ?: return null
+            val r = parts[2].toFloatOrNull() ?: return null
+            val b = parts[3].toFloatOrNull() ?: return null
+            val pix = parts.getOrNull(4) == "1"
+            return NormalizedRedactionBox(
+                left = l,
+                top = t,
+                right = r,
+                bottom = b,
+                isPixelated = pix
+            )
+        }
+
+        fun serializeList(boxes: List<NormalizedRedactionBox>): String {
+            if (boxes.isEmpty()) return ""
+            return boxes.joinToString(separator = ";") { it.toToken() }
+        }
+
+        fun deserializeList(raw: String?): List<NormalizedRedactionBox> {
+            if (raw.isNullOrBlank()) return emptyList()
+            return raw.split(';').mapNotNull { fromToken(it.trim()) }
+        }
+    }
+}
+
+/**
+ * Especificación individual de edición visual de una página de PDF en vista previa (v0.3).
+ * Soporta reordenamiento entre PDFs, rotación (0°/90°/180°/270°), exclusión/inclusión,
+ * inserción de páginas separadoras en blanco, duplicación de páginas, estampado de firma manuscrita
+ * y rectángulos de censura sobre la página.
  */
 data class PdfPageEditItem(
     val id: String,
@@ -15,13 +74,16 @@ data class PdfPageEditItem(
     val originalPageIndex: Int,
     val totalPagesInSource: Int,
     val rotationDegrees: Int = 0,
-    val included: Boolean = true
+    val included: Boolean = true,
+    val isBlankSeparator: Boolean = false,
+    val hasSignatureStamp: Boolean = false,
+    val redactionBoxes: List<NormalizedRedactionBox> = emptyList()
 ) {
     val normalizedRotation: Int
         get() = ((rotationDegrees % 360) + 360) % 360
 
     val displayPageNumber: Int
-        get() = originalPageIndex + 1
+        get() = if (isBlankSeparator) 0 else (originalPageIndex + 1)
 
     companion object {
         private fun enc(value: String): String =
@@ -44,7 +106,10 @@ data class PdfPageEditItem(
                     item.originalPageIndex.toString(),
                     item.totalPagesInSource.toString(),
                     item.normalizedRotation.toString(),
-                    if (item.included) "1" else "0"
+                    if (item.included) "1" else "0",
+                    if (item.isBlankSeparator) "1" else "0",
+                    if (item.hasSignatureStamp) "1" else "0",
+                    enc(NormalizedRedactionBox.serializeList(item.redactionBoxes))
                 ).joinToString(separator = "\t")
             }
         }
@@ -63,6 +128,11 @@ data class PdfPageEditItem(
                 val totalPages = parts[4].toIntOrNull() ?: 1
                 val rotation = parts[5].toIntOrNull() ?: 0
                 val included = parts[6] == "1" || parts[6].equals("true", ignoreCase = true)
+                val isBlank = parts.getOrNull(7) == "1"
+                val hasSig = parts.getOrNull(8) == "1"
+                val boxes = NormalizedRedactionBox.deserializeList(
+                    parts.getOrNull(9)?.let { dec(it) }
+                )
 
                 result.add(
                     PdfPageEditItem(
@@ -72,7 +142,10 @@ data class PdfPageEditItem(
                         originalPageIndex = pageIndex,
                         totalPagesInSource = totalPages,
                         rotationDegrees = rotation,
-                        included = included
+                        included = included,
+                        isBlankSeparator = isBlank,
+                        hasSignatureStamp = hasSig,
+                        redactionBoxes = boxes
                     )
                 )
             }

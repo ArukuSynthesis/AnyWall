@@ -37,6 +37,11 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
 
+            <!-- Atajos estáticos del lanzador (App Shortcuts v0.3) -->
+            <meta-data
+                android:name="android.app.shortcuts"
+                android:resource="@xml/shortcuts" />
+
             <!-- Integración con Android Share Sheet: Un solo archivo -->
             <intent-filter>
                 <action android:name="android.intent.action.SEND" />
@@ -58,6 +63,18 @@
             android:exported="false"
             android:foregroundServiceType="dataSync"
             tools:node="merge" />
+
+        <!-- Quick Settings Tile para abrir AnyWall desde el panel superior del sistema (v0.3) -->
+        <service
+            android:name=".core.AnyWallQuickTileService"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher"
+            android:label="@string/quick_tile_label"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+        </service>
 
         <!-- FileProvider para abrir y compartir archivos generados de forma segura -->
         <provider

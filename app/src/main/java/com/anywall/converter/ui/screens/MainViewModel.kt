@@ -6,23 +6,36 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import androidx.work.WorkInfo
 import com.anywall.converter.core.AppContainer
+import com.anywall.converter.core.AppLanguageMode
 import com.anywall.converter.core.AppPreferences
 import com.anywall.converter.core.AppThemeMode
 import com.anywall.converter.core.LocalThumbnailLoader
+import com.anywall.converter.core.OutputSubfolderMode
+import com.anywall.converter.core.ScopedStorageManager
 import com.anywall.converter.core.UriFileResolver
+import com.anywall.converter.data.engines.ArchiveEngineImpl
+import com.anywall.converter.data.engines.ForensicMetadataHelper
 import com.anywall.converter.domain.engine.ConverterEngineRegistry
 import com.anywall.converter.domain.model.ActiveJobState
+import com.anywall.converter.domain.model.ArchiveCompressionLevel
 import com.anywall.converter.domain.model.ConversionOptions
+import com.anywall.converter.domain.model.ConversionPreset
 import com.anywall.converter.domain.model.FormatCategory
 import com.anywall.converter.domain.model.HistoryRecord
+import com.anywall.converter.domain.model.ImageBatchLayoutMode
+import com.anywall.converter.domain.model.ImageEditSpec
 import com.anywall.converter.domain.model.InputFileItem
+import com.anywall.converter.domain.model.LineEndingOption
 import com.anywall.converter.domain.model.PdfActionMode
 import com.anywall.converter.domain.model.PdfPageEditItem
 import com.anywall.converter.domain.model.PdfPageOrientation
 import com.anywall.converter.domain.model.PdfPageSize
+import com.anywall.converter.domain.model.SecondaryPipelineAction
 import com.anywall.converter.domain.model.SupportedFormat
+import com.anywall.converter.domain.model.TextEncodingOption
 import com.anywall.converter.domain.model.VideoResolution
 import com.anywall.converter.domain.repository.ConversionHistoryRepository
+import com.anywall.converter.domain.repository.ConversionPresetRepository
 import com.anywall.converter.workers.BatchConversionWorker
 import com.anywall.converter.workers.ConversionWorkScheduler
 import kotlinx.coroutines.Dispatchers
@@ -49,6 +62,8 @@ data class ConfigureUiState(
     val options: ConversionOptions = ConversionOptions(),
     val trimStartText: String = "",
     val trimEndText: String = "",
+    val targetImageMaxKbText: String = "",
+    val targetVideoMaxMbText: String = "",
     val isResolvingFiles: Boolean = false,
     val activeJob: ActiveJobState = ActiveJobState()
 ) {
@@ -65,7 +80,20 @@ data class ConfigureUiState(
         get() {
             val target = selectedTargetFormat ?: return false
             val allPdfs = inputFiles.isNotEmpty() && inputFiles.all { it.format == SupportedFormat.PDF }
-            return allPdfs && (target == SupportedFormat.PDF || target == SupportedFormat.JPG || target == SupportedFormat.PNG)
+            return allPdfs && (target == SupportedFormat.PDF || target == SupportedFormat.JPG || target == SupportedFormat.PNG || target == SupportedFormat.WEBP)
+        }
+
+    val showVisualImageEditorButton: Boolean
+        get() {
+            val target = selectedTargetFormat ?: return false
+            val hasImages = inputFiles.any { it.format.category == FormatCategory.IMAGE }
+            return hasImages && (target.category == FormatCategory.IMAGE || target == SupportedFormat.PDF)
+        }
+
+    val showArchivePreviewButton: Boolean
+        get() {
+            val target = selectedTargetFormat ?: return false
+            return target == SupportedFormat.EXTRACT_ARCHIVE && inputFiles.isNotEmpty()
         }
 
     val showQualitySlider: Boolean
@@ -81,8 +109,7 @@ data class ConfigureUiState(
                 SupportedFormat.JPG,
                 SupportedFormat.WEBP,
                 SupportedFormat.PDF,
-                SupportedFormat.MP3,
-                SupportedFormat.ZIP
+                SupportedFormat.MP3
             )
         }
 
@@ -104,14 +131,25 @@ data class ConfigureUiState(
             return hasImageOrPdfInput && (target.category == FormatCategory.IMAGE || target == SupportedFormat.PDF)
         }
 
+    val showImageAdvancedV03Options: Boolean
+        get() {
+            val target = selectedTargetFormat ?: return false
+            val allImages = inputFiles.isNotEmpty() && inputFiles.all { it.format.category == FormatCategory.IMAGE }
+            return allImages && (target.category == FormatCategory.IMAGE || target == SupportedFormat.PDF)
+        }
+
     val showVideoResolutionSelector: Boolean
         get() = selectedTargetFormat?.isVideo == true
 
     val showMediaTrimAndMuteOptions: Boolean
         get() {
             val target = selectedTargetFormat ?: return false
-            return target.isVideo || target.isAudio
+            return target.isVideo || target.isAudio ||
+                (inputFiles.any { it.format.isVideo } && target == SupportedFormat.GIF)
         }
+
+    val showAudioV03Options: Boolean
+        get() = selectedTargetFormat?.isAudio == true
 
     val showMergePdfToggle: Boolean
         get() {
@@ -136,13 +174,21 @@ data class ConfigureUiState(
             val allPdfInputs = inputFiles.isNotEmpty() && inputFiles.all { it.format == SupportedFormat.PDF }
             if (!allPdfInputs) return false
             return (target == SupportedFormat.PDF && options.pdfActionMode == PdfActionMode.SPLIT_RANGE) ||
-                (target == SupportedFormat.JPG || target == SupportedFormat.PNG)
+                (target == SupportedFormat.JPG || target == SupportedFormat.PNG || target == SupportedFormat.WEBP)
         }
 
     val showPdfPasswordField: Boolean
         get() {
             val target = selectedTargetFormat ?: return false
             return target == SupportedFormat.PDF
+        }
+
+    val showPdfDecorationsSection: Boolean
+        get() {
+            val target = selectedTargetFormat ?: return false
+            return target == SupportedFormat.PDF &&
+                options.pdfActionMode != PdfActionMode.UNLOCK_PASSWORD &&
+                options.pdfActionMode != PdfActionMode.EXTRACT_EMBEDDED_IMAGES
         }
 
     val showPdfPageSetupSelector: Boolean
@@ -152,38 +198,90 @@ data class ConfigureUiState(
             return inputFiles.any {
                 it.format in setOf(
                     SupportedFormat.DOCX,
+                    SupportedFormat.XLSX,
+                    SupportedFormat.EPUB,
                     SupportedFormat.HTML,
                     SupportedFormat.TXT,
-                    SupportedFormat.MD
+                    SupportedFormat.MD,
+                    SupportedFormat.CSV,
+                    SupportedFormat.JSON
                 )
             }
+        }
+
+    val showArchiveV03Options: Boolean
+        get() {
+            val target = selectedTargetFormat ?: return false
+            return target.isArchiveOutput || target == SupportedFormat.FILE_PARTS
+        }
+
+    val showStructuredDataV03Options: Boolean
+        get() {
+            val target = selectedTargetFormat ?: return false
+            return target in setOf(
+                SupportedFormat.CSV,
+                SupportedFormat.JSON,
+                SupportedFormat.XML,
+                SupportedFormat.YAML,
+                SupportedFormat.HTML,
+                SupportedFormat.TXT,
+                SupportedFormat.BASE64
+            ) && inputFiles.any {
+                it.format.category == FormatCategory.DATA_TOOLS ||
+                    it.format in setOf(SupportedFormat.TXT, SupportedFormat.MD, SupportedFormat.HTML, SupportedFormat.XLSX)
+            }
+        }
+
+    val showVaultPasswordField: Boolean
+        get() {
+            val target = selectedTargetFormat ?: return false
+            return target == SupportedFormat.ANYWALL_VAULT ||
+                inputFiles.any { it.format == SupportedFormat.ANYWALL_VAULT } ||
+                options.secondaryPipelineAction == SecondaryPipelineAction.ENCRYPT_AES256
+        }
+
+    val showQrCustomTextField: Boolean
+        get() {
+            val target = selectedTargetFormat ?: return false
+            return target == SupportedFormat.QR_PNG || target == SupportedFormat.QR_SVG
         }
 }
 
 /**
- * ViewModel principal de AnyWall (v0.2) con arquitectura MVVM pura e inyección desde `AppContainer`.
+ * ViewModel principal de AnyWall (v0.3) con arquitectura MVVM pura e inyección desde `AppContainer`.
  */
 class MainViewModel(
     private val appPreferences: AppPreferences,
-    private val uriFileResolver: UriFileResolver,
+    val uriFileResolver: UriFileResolver,
     val thumbnailLoader: LocalThumbnailLoader,
+    val scopedStorageManager: ScopedStorageManager,
+    val forensicMetadataHelper: ForensicMetadataHelper,
+    val archiveEngineImpl: ArchiveEngineImpl,
     private val engineRegistry: ConverterEngineRegistry,
     private val historyRepository: ConversionHistoryRepository,
+    private val presetRepository: ConversionPresetRepository,
     private val workScheduler: ConversionWorkScheduler
 ) : ViewModel() {
 
     private val _configureState = MutableStateFlow(
         ConfigureUiState(
             options = ConversionOptions(
-                stripExifMetadata = appPreferences.defaultStripExif.value
+                stripExifMetadata = appPreferences.defaultStripExif.value,
+                pdfSignaturePngPath = appPreferences.savedSignaturePngPath.value
             )
         )
     )
     val configureState: StateFlow<ConfigureUiState> = _configureState.asStateFlow()
 
     val themeMode: StateFlow<AppThemeMode> = appPreferences.themeMode
+    val languageMode: StateFlow<AppLanguageMode> = appPreferences.languageMode
+    val outputSubfolderMode: StateFlow<OutputSubfolderMode> = appPreferences.outputSubfolderMode
+    val customSubfolderName: StateFlow<String> = appPreferences.customSubfolderName
     val autoCleanTempCache: StateFlow<Boolean> = appPreferences.autoCleanTempCache
     val defaultStripExif: StateFlow<Boolean> = appPreferences.defaultStripExif
+    val biometricHistoryLockEnabled: StateFlow<Boolean> = appPreferences.biometricHistoryLockEnabled
+    val historyPinCode: StateFlow<String> = appPreferences.historyPinCode
+    val savedSignaturePngPath: StateFlow<String> = appPreferences.savedSignaturePngPath
 
     private val _tempCacheSizeBytes = MutableStateFlow(0L)
     val tempCacheSizeBytes: StateFlow<Long> = _tempCacheSizeBytes.asStateFlow()
@@ -198,6 +296,9 @@ class MainViewModel(
     val navigateToConfigureFlow = _navigateToConfigureChannel.receiveAsFlow()
 
     val allHistoryRecords: StateFlow<List<HistoryRecord>> = historyRepository.observeAll()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    val allPresets: StateFlow<List<ConversionPreset>> = presetRepository.observeAllPresets()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     val filteredHistoryRecords: StateFlow<List<HistoryRecord>> = combine(
@@ -220,6 +321,9 @@ class MainViewModel(
 
     init {
         performStartupCacheMaintenance()
+        viewModelScope.launch(Dispatchers.IO) {
+            presetRepository.ensureBuiltInPresetsSeeded()
+        }
     }
 
     private fun performStartupCacheMaintenance() {
@@ -251,6 +355,26 @@ class MainViewModel(
         appPreferences.setThemeMode(mode)
     }
 
+    fun setLanguageMode(mode: AppLanguageMode) {
+        appPreferences.setLanguageMode(mode)
+    }
+
+    fun setOutputSubfolderMode(mode: OutputSubfolderMode) {
+        appPreferences.setOutputSubfolderMode(mode)
+    }
+
+    fun setCustomSubfolderName(name: String) {
+        appPreferences.setCustomSubfolderName(name)
+    }
+
+    fun setBiometricHistoryLockEnabled(enabled: Boolean) {
+        appPreferences.setBiometricHistoryLockEnabled(enabled)
+    }
+
+    fun setHistoryPinCode(pin: String) {
+        appPreferences.setHistoryPinCode(pin)
+    }
+
     fun setAutoCleanTempCache(enabled: Boolean) {
         appPreferences.setAutoCleanTempCache(enabled)
     }
@@ -259,6 +383,60 @@ class MainViewModel(
         appPreferences.setDefaultStripExif(enabled)
         _configureState.update { current ->
             current.copy(options = current.options.copy(stripExifMetadata = enabled))
+        }
+    }
+
+    fun createCameraCaptureUri(): Uri {
+        return uriFileResolver.createCameraCaptureOutputUri()
+    }
+
+    fun applyConversionPreset(preset: ConversionPreset) {
+        _configureState.update { current ->
+            val targetAllowed = if (current.availableTargetFormats.isEmpty() ||
+                preset.targetFormat in current.availableTargetFormats
+            ) {
+                preset.targetFormat
+            } else {
+                current.selectedTargetFormat
+            }
+            current.copy(
+                selectedTargetFormat = targetAllowed,
+                options = preset.options.copy(
+                    pdfVisualPageEditsJson = current.options.pdfVisualPageEditsJson
+                ),
+                targetImageMaxKbText = preset.options.targetImageMaxSizeKb?.toString().orEmpty(),
+                targetVideoMaxMbText = preset.options.targetVideoMaxSizeMb?.toString().orEmpty(),
+                trimStartText = preset.options.trimStartSeconds?.toString().orEmpty(),
+                trimEndText = preset.options.trimEndSeconds?.toString().orEmpty()
+            )
+        }
+    }
+
+    fun saveCurrentAsPreset(name: String, description: String) {
+        val cleanName = name.trim()
+        if (cleanName.isEmpty()) return
+        val snap = _configureState.value
+        val target = snap.selectedTargetFormat ?: SupportedFormat.PDF
+        viewModelScope.launch(Dispatchers.IO) {
+            presetRepository.savePreset(
+                ConversionPreset(
+                    name = cleanName,
+                    description = description.trim().ifBlank { "${target.label} • ${snap.options.clampedQuality}%" },
+                    category = target.category,
+                    targetFormat = target,
+                    options = snap.options.copy(
+                        pdfVisualPageEditsJson = "",
+                        selectedArchiveEntriesSerialized = ""
+                    ),
+                    isBuiltIn = false
+                )
+            )
+        }
+    }
+
+    fun deleteConversionPreset(id: Long) {
+        viewModelScope.launch(Dispatchers.IO) {
+            presetRepository.deletePreset(id)
         }
     }
 
@@ -282,7 +460,10 @@ class MainViewModel(
                 recalculateAvailableFormats(
                     current.copy(
                         inputFiles = mergedInputs,
-                        options = current.options.copy(pdfVisualPageEditsJson = ""),
+                        options = current.options.copy(
+                            pdfVisualPageEditsJson = "",
+                            selectedArchiveEntriesSerialized = ""
+                        ),
                         isResolvingFiles = false,
                         activeJob = if (replaceExisting && !current.activeJob.isRunning) {
                             ActiveJobState()
@@ -300,7 +481,8 @@ class MainViewModel(
     }
 
     /**
-     * Importa todos los archivos de una carpeta seleccionada con `OpenDocumentTree`.
+     * Importa todos los archivos de una carpeta seleccionada con `OpenDocumentTree`
+     * preservando sus rutas de subcarpeta relativas (`relativeFolderPath`).
      */
     fun addInputFolderTree(
         treeUri: Uri,
@@ -309,18 +491,34 @@ class MainViewModel(
     ) {
         viewModelScope.launch {
             _configureState.update { it.copy(isResolvingFiles = true) }
-            val folderUris = withContext(Dispatchers.IO) {
-                uriFileResolver.resolveFolderTreeUris(treeUri)
+            val resolvedItems = withContext(Dispatchers.IO) {
+                val entries = uriFileResolver.resolveFolderTreeEntries(treeUri)
+                entries.mapNotNull { entry ->
+                    uriFileResolver.resolveInputFile(entry.uri, entry.relativeFolderPath)
+                }
             }
-            if (folderUris.isEmpty()) {
+            if (resolvedItems.isEmpty()) {
                 _configureState.update { it.copy(isResolvingFiles = false) }
                 return@launch
             }
-            addInputUris(
-                uris = folderUris,
-                replaceExisting = replaceExisting,
-                navigateToConfigure = navigateToConfigure
-            )
+            _configureState.update { current ->
+                val baseList = if (replaceExisting) emptyList() else current.inputFiles
+                val existingUris = baseList.map { it.uri }.toSet()
+                val mergedInputs = baseList + resolvedItems.filter { it.uri !in existingUris }
+                recalculateAvailableFormats(
+                    current.copy(
+                        inputFiles = mergedInputs,
+                        options = current.options.copy(
+                            pdfVisualPageEditsJson = "",
+                            selectedArchiveEntriesSerialized = ""
+                        ),
+                        isResolvingFiles = false
+                    )
+                )
+            }
+            if (navigateToConfigure) {
+                _navigateToConfigureChannel.trySend(Unit)
+            }
         }
     }
 
@@ -407,6 +605,22 @@ class MainViewModel(
         }
     }
 
+    fun applyVisualImageEdits(spec: ImageEditSpec) {
+        _configureState.update { current ->
+            current.copy(
+                options = current.options.copy(imageVisualEditSerialized = spec.toSerializedString())
+            )
+        }
+    }
+
+    fun clearVisualImageEdits() {
+        _configureState.update { current ->
+            current.copy(
+                options = current.options.copy(imageVisualEditSerialized = "")
+            )
+        }
+    }
+
     fun removeInputFile(uri: Uri) {
         _configureState.update { current ->
             val updatedList = current.inputFiles.filterNot { it.uri == uri }
@@ -425,10 +639,13 @@ class MainViewModel(
                 current.copy(
                     inputFiles = emptyList(),
                     options = ConversionOptions(
-                        stripExifMetadata = appPreferences.defaultStripExif.value
+                        stripExifMetadata = appPreferences.defaultStripExif.value,
+                        pdfSignaturePngPath = appPreferences.savedSignaturePngPath.value
                     ),
                     trimStartText = "",
                     trimEndText = "",
+                    targetImageMaxKbText = "",
+                    targetVideoMaxMbText = "",
                     activeJob = if (current.activeJob.isRunning) current.activeJob else ActiveJobState()
                 )
             )
@@ -473,6 +690,29 @@ class MainViewModel(
         }
     }
 
+    fun updateTargetImageMaxSizeKb(rawText: String) {
+        val clean = rawText.filter { it.isDigit() }.take(6)
+        val kb = clean.toIntOrNull()?.takeIf { it > 0 }
+        _configureState.update { current ->
+            current.copy(
+                targetImageMaxKbText = clean,
+                options = current.options.copy(targetImageMaxSizeKb = kb)
+            )
+        }
+    }
+
+    fun updateImageBatchLayoutMode(mode: ImageBatchLayoutMode) {
+        _configureState.update { current ->
+            current.copy(options = current.options.copy(imageBatchLayoutMode = mode))
+        }
+    }
+
+    fun updateAnimatedGifFps(fps: Int) {
+        _configureState.update { current ->
+            current.copy(options = current.options.copy(animatedGifFps = fps.coerceIn(1, 24)))
+        }
+    }
+
     fun updateVideoResolution(resolution: VideoResolution) {
         _configureState.update { current ->
             current.copy(
@@ -511,6 +751,64 @@ class MainViewModel(
         }
     }
 
+    fun updateVideoPlaybackSpeed(factor: Float) {
+        _configureState.update { current ->
+            current.copy(options = current.options.copy(videoPlaybackSpeedFactor = factor))
+        }
+    }
+
+    fun updateVideoRotationDegrees(degrees: Int) {
+        _configureState.update { current ->
+            current.copy(options = current.options.copy(videoRotationDegrees = degrees))
+        }
+    }
+
+    fun updateVideoFlipHorizontal(flip: Boolean) {
+        _configureState.update { current ->
+            current.copy(options = current.options.copy(videoFlipHorizontal = flip))
+        }
+    }
+
+    fun updateTargetVideoMaxSizeMb(rawText: String) {
+        val clean = rawText.filter { it.isDigit() }.take(5)
+        val mb = clean.toIntOrNull()?.takeIf { it > 0 }
+        _configureState.update { current ->
+            current.copy(
+                targetVideoMaxMbText = clean,
+                options = current.options.copy(targetVideoMaxSizeMb = mb)
+            )
+        }
+    }
+
+    fun updateMergeMediaSequence(merge: Boolean) {
+        _configureState.update { current ->
+            current.copy(options = current.options.copy(mergeMediaSequence = merge))
+        }
+    }
+
+    fun updateAudioBitrateKbps(kbps: Int) {
+        _configureState.update { current ->
+            current.copy(options = current.options.copy(audioBitrateKbps = kbps))
+        }
+    }
+
+    fun updateAudioFadeSeconds(fadeIn: Int, fadeOut: Int) {
+        _configureState.update { current ->
+            current.copy(
+                options = current.options.copy(
+                    audioFadeInSeconds = fadeIn.coerceIn(0, 15),
+                    audioFadeOutSeconds = fadeOut.coerceIn(0, 15)
+                )
+            )
+        }
+    }
+
+    fun updateExportAsRingtone(ringtone: Boolean) {
+        _configureState.update { current ->
+            current.copy(options = current.options.copy(exportAsRingtone = ringtone))
+        }
+    }
+
     fun updateCustomOutputBaseName(name: String) {
         _configureState.update { current ->
             current.copy(
@@ -543,6 +841,14 @@ class MainViewModel(
         }
     }
 
+    fun updatePdfSplitChunkPages(pages: Int) {
+        _configureState.update { current ->
+            current.copy(
+                options = current.options.copy(pdfSplitChunkPages = pages.coerceIn(1, 500))
+            )
+        }
+    }
+
     fun updatePdfPassword(password: String) {
         _configureState.update { current ->
             current.copy(
@@ -564,6 +870,95 @@ class MainViewModel(
             current.copy(
                 options = current.options.copy(pdfPageOrientation = orientation)
             )
+        }
+    }
+
+    fun updatePdfWatermarkText(text: String) {
+        _configureState.update { current ->
+            current.copy(options = current.options.copy(pdfWatermarkText = text))
+        }
+    }
+
+    fun updateAddPdfPageNumbers(enabled: Boolean) {
+        _configureState.update { current ->
+            current.copy(options = current.options.copy(addPdfPageNumbers = enabled))
+        }
+    }
+
+    fun updatePdfSignaturePngPath(path: String) {
+        appPreferences.setSavedSignaturePngPath(path)
+        _configureState.update { current ->
+            current.copy(options = current.options.copy(pdfSignaturePngPath = path))
+        }
+    }
+
+    fun updatePdfStampQrContent(content: String) {
+        _configureState.update { current ->
+            current.copy(options = current.options.copy(pdfStampQrContent = content))
+        }
+    }
+
+    fun updateArchiveCompressionLevel(level: ArchiveCompressionLevel) {
+        _configureState.update { current ->
+            current.copy(options = current.options.copy(archiveCompressionLevel = level))
+        }
+    }
+
+    fun updateSelectedArchiveEntries(entries: Set<String>) {
+        _configureState.update { current ->
+            current.copy(
+                options = current.options.copy(
+                    selectedArchiveEntriesSerialized = entries.joinToString("\n")
+                )
+            )
+        }
+    }
+
+    fun updateFileSplitPartSizeMb(sizeMb: Int) {
+        _configureState.update { current ->
+            current.copy(options = current.options.copy(fileSplitPartSizeMb = sizeMb.coerceIn(1, 500)))
+        }
+    }
+
+    fun updatePreserveSubfolderStructure(preserve: Boolean) {
+        _configureState.update { current ->
+            current.copy(options = current.options.copy(preserveSubfolderStructure = preserve))
+        }
+    }
+
+    fun updatePrettyPrintStructuredData(pretty: Boolean) {
+        _configureState.update { current ->
+            current.copy(options = current.options.copy(prettyPrintStructuredData = pretty))
+        }
+    }
+
+    fun updateTextEncoding(encoding: TextEncodingOption) {
+        _configureState.update { current ->
+            current.copy(options = current.options.copy(textEncoding = encoding))
+        }
+    }
+
+    fun updateLineEndingOption(option: LineEndingOption) {
+        _configureState.update { current ->
+            current.copy(options = current.options.copy(lineEndingOption = option))
+        }
+    }
+
+    fun updateVaultPassword(password: String) {
+        _configureState.update { current ->
+            current.copy(options = current.options.copy(vaultPassword = password))
+        }
+    }
+
+    fun updateQrCustomText(text: String) {
+        _configureState.update { current ->
+            current.copy(options = current.options.copy(qrCustomText = text))
+        }
+    }
+
+    fun updateSecondaryPipelineAction(action: SecondaryPipelineAction) {
+        _configureState.update { current ->
+            current.copy(options = current.options.copy(secondaryPipelineAction = action))
         }
     }
 
@@ -744,6 +1139,8 @@ class MainViewModel(
         val currentSelected = state.selectedTargetFormat
         val smartDefault = when {
             currentSelected != null && currentSelected in available -> currentSelected
+            SupportedFormat.JOIN_PARTS in available && sourceFormats.any { it == SupportedFormat.FILE_PARTS } ->
+                SupportedFormat.JOIN_PARTS
             SupportedFormat.EXTRACT_ARCHIVE in available -> SupportedFormat.EXTRACT_ARCHIVE
             sourceFormats.size == 1 -> {
                 val singleSource = sourceFormats.first()
@@ -768,8 +1165,12 @@ class MainViewModel(
                         appPreferences = container.appPreferences,
                         uriFileResolver = container.uriFileResolver,
                         thumbnailLoader = container.thumbnailLoader,
+                        scopedStorageManager = container.scopedStorageManager,
+                        forensicMetadataHelper = container.forensicMetadataHelper,
+                        archiveEngineImpl = container.archiveEngineImpl,
                         engineRegistry = container.converterEngineRegistry,
                         historyRepository = container.historyRepository,
+                        presetRepository = container.presetRepository,
                         workScheduler = container.workScheduler
                     ) as T
                 }

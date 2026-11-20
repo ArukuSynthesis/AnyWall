@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Etiqueta de versión (ej. v0.2)'
+        description: 'Etiqueta de versión (ej. v0.3)'
         required: true
-        default: 'v0.2'
+        default: 'v0.3'
 
 permissions:
   contents: write
@@ -135,11 +135,10 @@ jobs:
 
           ### Novedades y Características (${TAG})
           - **Estrictamente 100% Offline:** 0 permisos de red en el APK final (sin \`INTERNET\` ni \`ACCESS_NETWORK_STATE\`, auditado automáticamente en CI con \`aapt2 dump permissions\`).
-          - **Modificador Visual de PDF en Vista Previa:** Previsualización en cuadrícula de todas las páginas de los PDFs cargados con zoom a pantalla completa, rotación individual por página (+90°), reordenamiento libre (\`←\` / \`→\`) y exclusión/inclusión selectiva de páginas.
-          - **Soporte Avanzado Multi-Archivo y Carpetas:** Importación recursiva de carpetas completas (\`OpenDocumentTree\`), ordenamiento rápido del lote por Nombre (A–Z), Tamaño o Invertir orden, reordenamiento individual (↑/↓), fusión de lotes mixtos (Imágenes + Documentos/PDF en un único PDF) y multiselección en Historial (\`ACTION_SEND_MULTIPLE\`).
-          - **Productividad, Créditos y UX v0.2:** Miniaturas locales (imágenes, portadas PDF y fotogramas de video), comparativa de ahorro de peso (\`Antes → Después, -%\`), Ajustes locales con selector de tema y gestor de caché, y diálogo de **Créditos y Licencias Open Source** atribuyendo a **SynthesizerEnd** y los 9 repositorios integrados.
-          - **Imágenes y PDF avanzado:** Conversión entre \`JPG\`, \`PNG\`, \`WEBP\`, \`BMP\` (24-bit), soporte de entrada \`HEIC/HEIF\`, \`GIF\` y \`SVG\`, rotación, limpieza EXIF/GPS, protección y desbloqueo de PDF con contraseña (\`StandardProtectionPolicy\`), y tamaño/orientación (\`A4\`/\`Carta\`, \`Vertical\`/\`Horizontal\`) para \`DOCX\`, \`HTML\`, \`TXT\` y \`MD\` a \`PDF\`.
-          - **Audio, Video y Archivos Comprimidos:** Conversión de video (\`MP4\`, \`MKV\`, \`MOV\`, \`WEBM\`) con resolución, **silenciado de audio** y **recorte de tiempo (Trim inicio–fin)**, extracción/conversión de audio (\`MP3\`, \`AAC\`, \`M4A\`, \`WAV\`), y empaquetado/extracción de \`ZIP\`, \`TAR\`, \`TAR.GZ\`, **\`TAR.XZ\`**, **\`TAR.BZ2\`**, \`GZ\`, **\`XZ\`**, **\`BZ2\`** y \`7Z\`.
+          - **Editor Visual de Imágenes y PDF Profesional:** \`ImageVisualEditorDialog\` (recorte interactivo, volteo, filtro escáner B/N alto contraste, fondo Blur, censura/pixelado y marca de agua), \`PdfVisualEditorDialog\` con duplicación de páginas, páginas separadoras en blanco, censura, **Firma Manuscrita local (\`SignaturePadDialog\`)**, numeración automática, marca de agua diagonal, modo Folleto/Cuadrícula (\`2-en-1\` y \`4-en-1\`) y extractor de imágenes embebidas originales.
+          - **Nuevos Formatos y Motor 5 (\`DataAndSecurityEngineImpl\`):** Soporte en Kotlin puro para hojas de cálculo **\`XLSX\`** y libros **\`EPUB\` (EPUB 3)**, entrada de imagen **\`AVIF\`**, salida **\`.ICO\`**, **\`GIF\` animado** y **Paquete de Íconos ZIP**, entrada de audio **\`FLAC\`/\`OGG\`/\`OPUS\`**, conversión entre **\`CSV\` ↔ \`JSON\` ↔ \`XML\` ↔ \`YAML\` ↔ \`BASE64\`**, **Bóveda Criptográfica Universal \`AES-256-GCM\` (\`.anywall\`)** y **Generador/Escáner QR Offline (\`PNG\`/\`SVG\`)**.
+          - **Audio, Video y Comprimidos Avanzados:** Compresión por peso objetivo (\`KB\` en imágenes y \`MB\` en video), Collages (\`2×2\`, \`3×3\`) y Tiras continuas, concatenación de múltiples videos o audios, velocidad/rotación/espejo de video, Video → GIF/Frames, bitrate de audio (\`128/192/320 kbps\`), Fade In/Out, modo Ringtone, **Explorador Previo de Comprimidos (\`ArchivePreviewDialog\`)** con extracción selectiva y **Divisor/Reconstructor de archivos grandes (\`.part001\`)** con verificación \`SHA-256\`.
+          - **Suite de Herramientas Offline, Presets Room v3 y Automatización:** Inspector Forense de Metadatos (EXIF/GPS/PDF/Media) + Verificador \`SHA-256\`/\`MD5\`, Comparador Local Diff (LCS), Comparador Visual «Antes / Después», Perfiles Rápidos guardables (Room v3), captura desde Cámara/Escáner, plantillas de renombrado (\`{nombre}\`, \`{indice}\`, \`{fecha}\`, \`{formato}\`), Pipelines de 2 pasos, bloqueo biométrico/PIN del historial, interfaz bilingüe (\`ES\`/\`EN\`), App Shortcuts, Quick Settings Tile y créditos Open Source atribuyendo a **SynthesizerEnd**.
 
           ### Descarga e integridad
           - **Archivo:** \`${APK_NAME}\` (${SIZE_HR}, firmado con APK Signature Scheme v2)

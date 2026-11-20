@@ -6,22 +6,25 @@ import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import androidx.work.workDataOf
 import com.anywall.converter.AnyWallApplication
+import com.anywall.converter.core.ScopedStorageManager
+import com.anywall.converter.core.UriFileResolver
+import com.anywall.converter.data.engines.AesVaultCrypto
+import com.anywall.converter.domain.engine.ConverterEngineRegistry
+import com.anywall.converter.domain.model.ConversionJobResult
 import com.anywall.converter.domain.model.ConversionOptions
+import com.anywall.converter.domain.model.FormatCategory
 import com.anywall.converter.domain.model.InputFileItem
-import com.anywall.converter.domain.model.PdfActionMode
-import com.anywall.converter.domain.model.PdfPageOrientation
-import com.anywall.converter.domain.model.PdfPageSize
+import com.anywall.converter.domain.model.SecondaryPipelineAction
 import com.anywall.converter.domain.model.SupportedFormat
-import com.anywall.converter.domain.model.VideoResolution
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.util.concurrent.CancellationException
 
 /**
- * `CoroutineWorker` de WorkManager que ejecuta todas las conversiones de AnyWall en segundo plano (v0.2),
- * manteniendo una notificación persistente con barra de progreso real y registrando los resultados
- * en la base de datos local Room.
+ * `CoroutineWorker` de WorkManager que ejecuta todas las conversiones de AnyWall en segundo plano (v0.3),
+ * incluyendo soporte de encadenamiento de 2 pasos (`SecondaryPipelineAction`: empaquetar en ZIP/TAR.XZ,
+ * cifrar en Bóveda AES-256 o generar manifiesto SHA-256), notificación de progreso y registro en Room.
  */
 class BatchConversionWorker(
     appContext: Context,
@@ -34,6 +37,7 @@ class BatchConversionWorker(
         val container = app.container
         val notificationHelper = container.notificationHelper
         val uriResolver = container.uriFileResolver
+        val storageManager = container.scopedStorageManager
         val engineRegistry = container.converterEngineRegistry
         val historyRepository = container.historyRepository
 
@@ -52,12 +56,11 @@ class BatchConversionWorker(
                 )
             }
 
+            val hasStep2 = options.secondaryPipelineAction != SecondaryPipelineAction.NONE
+            val step1Weight = if (hasStep2) 0.78f else 1.0f
+
             var lastNotificationUpdateMs = 0L
-            val results = engineRegistry.executeConversion(
-                inputs = inputs,
-                targetFormat = targetFormat,
-                options = options
-            ) { progress, statusText ->
+            fun reportWorkerProgress(progress: Float, statusText: String) {
                 val clamped = progress.coerceIn(0f, 1f)
                 setProgressAsync(
                     workDataOf(
@@ -78,23 +81,46 @@ class BatchConversionWorker(
                 }
             }
 
-            historyRepository.recordConversions(results)
+            val step1Results = engineRegistry.executeConversion(
+                inputs = inputs,
+                targetFormat = targetFormat,
+                options = options
+            ) { p, msg ->
+                reportWorkerProgress(p * step1Weight, msg)
+            }
 
-            val doneMsg = "Conversión completada (${results.size} ${if (results.size == 1) "archivo" else "archivos"})"
+            val finalResults = if (hasStep2 && step1Results.isNotEmpty()) {
+                executeSecondaryPipelineStep(
+                    step1Results = step1Results,
+                    options = options,
+                    uriResolver = uriResolver,
+                    storageManager = storageManager,
+                    engineRegistry = engineRegistry,
+                    onProgress = { subP, msg ->
+                        reportWorkerProgress(step1Weight + subP * (1f - step1Weight), msg)
+                    }
+                )
+            } else {
+                step1Results
+            }
+
+            historyRepository.recordConversions(finalResults)
+
+            val doneMsg = "Conversión completada (${finalResults.size} ${if (finalResults.size == 1) "archivo" else "archivos"})"
             setProgress(
                 workDataOf(
                     KEY_PROGRESS to 1f,
                     KEY_STATUS to doneMsg,
-                    KEY_GENERATED_COUNT to results.size
+                    KEY_GENERATED_COUNT to finalResults.size
                 )
             )
-            notificationHelper.notifyBatchFinished(results.size, null)
+            notificationHelper.notifyBatchFinished(finalResults.size, null)
 
             Result.success(
                 workDataOf(
                     KEY_PROGRESS to 1f,
                     KEY_STATUS to doneMsg,
-                    KEY_GENERATED_COUNT to results.size
+                    KEY_GENERATED_COUNT to finalResults.size
                 )
             )
         } catch (ce: CancellationException) {
@@ -118,33 +144,137 @@ class BatchConversionWorker(
         }
     }
 
+    private suspend fun executeSecondaryPipelineStep(
+        step1Results: List<ConversionJobResult>,
+        options: ConversionOptions,
+        uriResolver: UriFileResolver,
+        storageManager: ScopedStorageManager,
+        engineRegistry: ConverterEngineRegistry,
+        onProgress: (Float, String) -> Unit
+    ): List<ConversionJobResult> {
+        val action = options.secondaryPipelineAction
+        val step2Inputs = step1Results.map { res ->
+            InputFileItem(
+                uri = res.outputUri,
+                displayName = res.outputDisplayName,
+                sizeBytes = res.outputSizeBytes,
+                mimeType = res.outputMimeType,
+                format = res.outputFormat
+            )
+        }
+
+        return when (action) {
+            SecondaryPipelineAction.NONE -> step1Results
+
+            SecondaryPipelineAction.PACK_ZIP -> {
+                onProgress(0.1f, "Paso 2: Empaquetando salidas en archivo ZIP…")
+                val zipResults = engineRegistry.archiveEngine.convert(
+                    inputs = step2Inputs,
+                    targetFormat = SupportedFormat.ZIP,
+                    options = options.copy(secondaryPipelineAction = SecondaryPipelineAction.NONE),
+                    onProgress = onProgress
+                )
+                step1Results + zipResults
+            }
+
+            SecondaryPipelineAction.PACK_TAR_XZ -> {
+                onProgress(0.1f, "Paso 2: Empaquetando salidas en archivo TAR.XZ…")
+                val tarResults = engineRegistry.archiveEngine.convert(
+                    inputs = step2Inputs,
+                    targetFormat = SupportedFormat.TAR_XZ,
+                    options = options.copy(secondaryPipelineAction = SecondaryPipelineAction.NONE),
+                    onProgress = onProgress
+                )
+                step1Results + tarResults
+            }
+
+            SecondaryPipelineAction.ENCRYPT_AES256 -> {
+                val dataEngine = engineRegistry.dataAndSecurityEngine ?: return step1Results
+                val effectiveOptions = if (options.vaultPassword.isNotBlank()) {
+                    options
+                } else if (options.pdfPassword.isNotBlank()) {
+                    options.copy(vaultPassword = options.pdfPassword)
+                } else {
+                    return step1Results
+                }
+                onProgress(0.1f, "Paso 2: Cifrando salidas en Bóveda AES-256 (.anywall)…")
+                val vaultResults = dataEngine.convert(
+                    inputs = step2Inputs,
+                    targetFormat = SupportedFormat.ANYWALL_VAULT,
+                    options = effectiveOptions.copy(secondaryPipelineAction = SecondaryPipelineAction.NONE),
+                    onProgress = onProgress
+                )
+                step1Results + vaultResults
+            }
+
+            SecondaryPipelineAction.COMPUTE_SHA256_MANIFEST -> {
+                onProgress(0.2f, "Paso 2: Calculando hashes SHA-256 y MD5 de los archivos generados…")
+                val manifestText = buildString {
+                    appendLine("# AnyWall Universal Converter v0.3 — Manifiesto de Integridad SHA-256 / MD5")
+                    appendLine("# Generado 100% Offline")
+                    appendLine()
+                    for (res in step1Results) {
+                        val sha256 = try {
+                            uriResolver.openInputStream(res.outputUri).use {
+                                AesVaultCrypto.computeDigestHex(it, "SHA-256")
+                            }
+                        } catch (_: Throwable) {
+                            "no-disponible"
+                        }
+                        val md5 = try {
+                            uriResolver.openInputStream(res.outputUri).use {
+                                AesVaultCrypto.computeDigestHex(it, "MD5")
+                            }
+                        } catch (_: Throwable) {
+                            "no-disponible"
+                        }
+                        appendLine("$sha256  ${res.outputDisplayName}  (MD5: $md5, ${res.outputSizeBytes} bytes)")
+                    }
+                }
+                val tempManifest = uriResolver.createTempWorkingFile("sha256sums_", "txt")
+                try {
+                    tempManifest.writeText(manifestText, Charsets.UTF_8)
+                    val firstBase = step1Results.first().outputDisplayName.substringBeforeLast('.')
+                    val saved = storageManager.saveTempFileToDownloads(
+                        sourceFile = tempManifest,
+                        desiredDisplayName = "${firstBase}_SHA256SUMS.txt",
+                        mimeType = "text/plain"
+                    )
+                    val manifestResult = ConversionJobResult(
+                        sourceDisplayName = "Manifiesto de lote (${step1Results.size} archivos)",
+                        sourceFormat = step1Results.first().outputFormat,
+                        sourceSizeBytes = saved.sizeBytes,
+                        outputDisplayName = saved.displayName,
+                        outputFormat = SupportedFormat.TXT,
+                        outputCategory = FormatCategory.DATA_TOOLS,
+                        outputUri = saved.uri,
+                        outputAbsolutePath = saved.absolutePath,
+                        outputSizeBytes = saved.sizeBytes,
+                        outputMimeType = saved.mimeType
+                    )
+                    step1Results + manifestResult
+                } finally {
+                    tempManifest.delete()
+                }
+            }
+        }
+    }
+
     private fun parseWorkInput(
         payloadFile: File?,
-        uriResolver: com.anywall.converter.core.UriFileResolver
+        uriResolver: UriFileResolver
     ): Triple<List<InputFileItem>, SupportedFormat, ConversionOptions> {
         if (payloadFile != null && payloadFile.exists()) {
             val json = JSONObject(payloadFile.readText(Charsets.UTF_8))
             val targetFormat = SupportedFormat.fromNameOrNull(json.optString("targetFormat"))
                 ?: throw IllegalArgumentException("Formato destino inválido en el lote.")
 
-            val options = ConversionOptions(
-                qualityPercent = json.optInt("qualityPercent", 85),
-                maxDimensionPx = json.optInt("maxDimensionPx", -1).takeIf { it > 0 },
-                imageRotationDegrees = json.optInt("imageRotationDegrees", 0),
-                stripExifMetadata = json.optBoolean("stripExifMetadata", true),
-                videoResolution = VideoResolution.fromNameOrDefault(json.optString("videoResolution")),
-                muteVideoAudio = json.optBoolean("muteVideoAudio", false),
-                trimStartSeconds = json.optLong("trimStartSeconds", -1L).takeIf { it >= 0L },
-                trimEndSeconds = json.optLong("trimEndSeconds", -1L).takeIf { it > 0L },
-                customOutputBaseName = json.optString("customOutputBaseName", ""),
-                mergeIntoSinglePdf = json.optBoolean("mergeIntoSinglePdf", true),
-                pdfActionMode = PdfActionMode.fromNameOrDefault(json.optString("pdfActionMode")),
-                pageRangeSpec = json.optString("pageRangeSpec", ""),
-                pdfPassword = json.optString("pdfPassword", ""),
-                pdfPageSize = PdfPageSize.fromNameOrDefault(json.optString("pdfPageSize")),
-                pdfPageOrientation = PdfPageOrientation.fromNameOrDefault(json.optString("pdfPageOrientation")),
-                pdfVisualPageEditsJson = json.optString("pdfVisualPageEditsJson", "")
-            )
+            val optionsSerialized = json.optString("optionsSerialized", "")
+            val options = if (optionsSerialized.isNotBlank()) {
+                ConversionOptions.deserializeFromString(optionsSerialized)
+            } else {
+                ConversionOptions()
+            }
 
             val itemsArray = json.optJSONArray("inputs") ?: JSONArray()
             val inputs = mutableListOf<InputFileItem>()
@@ -155,6 +285,7 @@ class BatchConversionWorker(
                 val displayName = obj.optString("displayName")
                 val sizeBytes = obj.optLong("sizeBytes", 0L)
                 val mimeType = obj.optString("mimeType")
+                val relativeFolderPath = obj.optString("relativeFolderPath", "")
 
                 if (format != null && displayName.isNotBlank()) {
                     inputs.add(
@@ -163,11 +294,12 @@ class BatchConversionWorker(
                             displayName = displayName,
                             sizeBytes = sizeBytes,
                             mimeType = mimeType.ifBlank { format.mimeType },
-                            format = format
+                            format = format,
+                            relativeFolderPath = relativeFolderPath
                         )
                     )
                 } else {
-                    uriResolver.resolveInputFile(uri)?.let(inputs::add)
+                    uriResolver.resolveInputFile(uri, relativeFolderPath)?.let(inputs::add)
                 }
             }
             return Triple(inputs, targetFormat, options)
@@ -180,24 +312,7 @@ class BatchConversionWorker(
         val inputs = uriStrings.mapNotNull { raw ->
             uriResolver.resolveInputFile(Uri.parse(raw))
         }
-        val options = ConversionOptions(
-            qualityPercent = inputData.getInt(KEY_QUALITY_PERCENT, 85),
-            maxDimensionPx = inputData.getInt(KEY_MAX_DIMENSION_PX, -1).takeIf { it > 0 },
-            imageRotationDegrees = inputData.getInt(KEY_IMAGE_ROTATION, 0),
-            stripExifMetadata = inputData.getBoolean(KEY_STRIP_EXIF, true),
-            videoResolution = VideoResolution.fromNameOrDefault(inputData.getString(KEY_VIDEO_RESOLUTION)),
-            muteVideoAudio = inputData.getBoolean(KEY_MUTE_VIDEO_AUDIO, false),
-            trimStartSeconds = inputData.getLong(KEY_TRIM_START_SECONDS, -1L).takeIf { it >= 0L },
-            trimEndSeconds = inputData.getLong(KEY_TRIM_END_SECONDS, -1L).takeIf { it > 0L },
-            customOutputBaseName = inputData.getString(KEY_CUSTOM_OUTPUT_NAME).orEmpty(),
-            mergeIntoSinglePdf = inputData.getBoolean(KEY_MERGE_SINGLE_PDF, true),
-            pdfActionMode = PdfActionMode.fromNameOrDefault(inputData.getString(KEY_PDF_ACTION_MODE)),
-            pageRangeSpec = inputData.getString(KEY_PAGE_RANGE_SPEC).orEmpty(),
-            pdfPassword = inputData.getString(KEY_PDF_PASSWORD).orEmpty(),
-            pdfPageSize = PdfPageSize.fromNameOrDefault(inputData.getString(KEY_PDF_PAGE_SIZE)),
-            pdfPageOrientation = PdfPageOrientation.fromNameOrDefault(inputData.getString(KEY_PDF_PAGE_ORIENTATION))
-        )
-        return Triple(inputs, targetFormat, options)
+        return Triple(inputs, targetFormat, ConversionOptions())
     }
 
     companion object {
@@ -207,21 +322,6 @@ class BatchConversionWorker(
         const val KEY_PAYLOAD_FILE_PATH = "payload_file_path"
         const val KEY_INPUT_URIS = "input_uris"
         const val KEY_TARGET_FORMAT = "target_format"
-        const val KEY_QUALITY_PERCENT = "quality_percent"
-        const val KEY_MAX_DIMENSION_PX = "max_dimension_px"
-        const val KEY_IMAGE_ROTATION = "image_rotation"
-        const val KEY_STRIP_EXIF = "strip_exif"
-        const val KEY_VIDEO_RESOLUTION = "video_resolution"
-        const val KEY_MUTE_VIDEO_AUDIO = "mute_video_audio"
-        const val KEY_TRIM_START_SECONDS = "trim_start_seconds"
-        const val KEY_TRIM_END_SECONDS = "trim_end_seconds"
-        const val KEY_CUSTOM_OUTPUT_NAME = "custom_output_name"
-        const val KEY_MERGE_SINGLE_PDF = "merge_single_pdf"
-        const val KEY_PDF_ACTION_MODE = "pdf_action_mode"
-        const val KEY_PAGE_RANGE_SPEC = "page_range_spec"
-        const val KEY_PDF_PASSWORD = "pdf_password"
-        const val KEY_PDF_PAGE_SIZE = "pdf_page_size"
-        const val KEY_PDF_PAGE_ORIENTATION = "pdf_page_orientation"
 
         const val KEY_PROGRESS = "progress"
         const val KEY_STATUS = "status"

@@ -3,7 +3,7 @@ package com.anywall.converter.domain.model
 import java.util.Locale
 
 /**
- * Formatos de archivo de entrada y salida soportados de manera 100% local por AnyWall (v0.2).
+ * Formatos de archivo de entrada y salida soportados de manera 100% local por AnyWall (v0.3).
  */
 enum class SupportedFormat(
     val label: String,
@@ -56,10 +56,29 @@ enum class SupportedFormat(
         category = FormatCategory.IMAGE,
         aliases = setOf("heif")
     ),
+    AVIF(
+        label = "AVIF",
+        extension = "avif",
+        mimeType = "image/avif",
+        category = FormatCategory.IMAGE
+    ),
     GIF(
         label = "GIF",
         extension = "gif",
         mimeType = "image/gif",
+        category = FormatCategory.IMAGE
+    ),
+    ICO(
+        label = "ICO",
+        extension = "ico",
+        mimeType = "image/x-icon",
+        category = FormatCategory.IMAGE,
+        aliases = setOf("cur")
+    ),
+    ICON_PACK_ZIP(
+        label = "PACK ICONOS",
+        extension = "zip",
+        mimeType = "application/zip",
         category = FormatCategory.IMAGE
     ),
 
@@ -76,6 +95,18 @@ enum class SupportedFormat(
         mimeType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         category = FormatCategory.DOCUMENT
     ),
+    XLSX(
+        label = "XLSX",
+        extension = "xlsx",
+        mimeType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        category = FormatCategory.DOCUMENT
+    ),
+    EPUB(
+        label = "EPUB",
+        extension = "epub",
+        mimeType = "application/epub+zip",
+        category = FormatCategory.DOCUMENT
+    ),
     HTML(
         label = "HTML",
         extension = "html",
@@ -88,7 +119,7 @@ enum class SupportedFormat(
         extension = "txt",
         mimeType = "text/plain",
         category = FormatCategory.DOCUMENT,
-        aliases = setOf("log", "csv")
+        aliases = setOf("log")
     ),
     MD(
         label = "MD",
@@ -159,8 +190,30 @@ enum class SupportedFormat(
         aliases = setOf("wave"),
         isAudio = true
     ),
+    FLAC(
+        label = "FLAC",
+        extension = "flac",
+        mimeType = "audio/flac",
+        category = FormatCategory.MEDIA,
+        isAudio = true
+    ),
+    OGG(
+        label = "OGG",
+        extension = "ogg",
+        mimeType = "audio/ogg",
+        category = FormatCategory.MEDIA,
+        aliases = setOf("oga"),
+        isAudio = true
+    ),
+    OPUS(
+        label = "OPUS",
+        extension = "opus",
+        mimeType = "audio/opus",
+        category = FormatCategory.MEDIA,
+        isAudio = true
+    ),
 
-    // Archivos comprimidos
+    // Archivos comprimidos y particionado
     ZIP(
         label = "ZIP",
         extension = "zip",
@@ -224,15 +277,85 @@ enum class SupportedFormat(
         mimeType = "application/x-7z-compressed",
         category = FormatCategory.ARCHIVE
     ),
+    FILE_PARTS(
+        label = "DIVIDIR PARTES",
+        extension = "part001",
+        mimeType = "application/octet-stream",
+        category = FormatCategory.ARCHIVE,
+        aliases = setOf("part01", "part1", "001")
+    ),
+    JOIN_PARTS(
+        label = "UNIR PARTES",
+        extension = "joined",
+        mimeType = "application/octet-stream",
+        category = FormatCategory.ARCHIVE,
+        isExtractionTarget = true
+    ),
     EXTRACT_ARCHIVE(
         label = "EXTRAER",
         extension = "folder",
         mimeType = "resource/folder",
         category = FormatCategory.ARCHIVE,
         isExtractionTarget = true
+    ),
+
+    // Datos estructurados, configuración y seguridad criptográfica (Motor 5)
+    CSV(
+        label = "CSV",
+        extension = "csv",
+        mimeType = "text/csv",
+        category = FormatCategory.DATA_TOOLS,
+        aliases = setOf("tsv")
+    ),
+    JSON(
+        label = "JSON",
+        extension = "json",
+        mimeType = "application/json",
+        category = FormatCategory.DATA_TOOLS
+    ),
+    XML(
+        label = "XML",
+        extension = "xml",
+        mimeType = "application/xml",
+        category = FormatCategory.DATA_TOOLS
+    ),
+    YAML(
+        label = "YAML",
+        extension = "yaml",
+        mimeType = "application/x-yaml",
+        category = FormatCategory.DATA_TOOLS,
+        aliases = setOf("yml")
+    ),
+    BASE64(
+        label = "BASE64",
+        extension = "b64",
+        mimeType = "text/plain",
+        category = FormatCategory.DATA_TOOLS,
+        aliases = setOf("base64")
+    ),
+    ANYWALL_VAULT(
+        label = "BÓVEDA AES",
+        extension = "anywall",
+        mimeType = "application/x-anywall-vault",
+        category = FormatCategory.DATA_TOOLS,
+        aliases = setOf("awv")
+    ),
+    QR_PNG(
+        label = "QR PNG",
+        extension = "png",
+        mimeType = "image/png",
+        category = FormatCategory.DATA_TOOLS
+    ),
+    QR_SVG(
+        label = "QR SVG",
+        extension = "svg",
+        mimeType = "image/svg+xml",
+        category = FormatCategory.DATA_TOOLS
     );
 
     companion object {
+        private val PART_EXTENSION_REGEX = Regex("^part\\d+$|^\\d{3}$", RegexOption.IGNORE_CASE)
+
         /**
          * Detecta el formato a partir del nombre del archivo y/o su tipo MIME.
          */
@@ -242,12 +365,19 @@ enum class SupportedFormat(
                 lowerName.endsWith(".tar.gz") || lowerName.endsWith(".tgz") -> return TAR_GZ
                 lowerName.endsWith(".tar.xz") || lowerName.endsWith(".txz") -> return TAR_XZ
                 lowerName.endsWith(".tar.bz2") || lowerName.endsWith(".tbz2") || lowerName.endsWith(".tbz") -> return TAR_BZ2
+                lowerName.endsWith(".anywall") || lowerName.endsWith(".awv") -> return ANYWALL_VAULT
             }
 
             val ext = lowerName.substringAfterLast('.', missingDelimiterValue = "")
             if (ext.isNotEmpty()) {
+                if (PART_EXTENSION_REGEX.matches(ext)) {
+                    return FILE_PARTS
+                }
                 entries.firstOrNull { format ->
                     !format.isExtractionTarget &&
+                        format != ICON_PACK_ZIP &&
+                        format != QR_PNG &&
+                        format != QR_SVG &&
                         (format.extension.equals(ext, ignoreCase = true) ||
                             format.aliases.any { it.equals(ext, ignoreCase = true) })
                 }?.let { return it }
@@ -262,11 +392,20 @@ enum class SupportedFormat(
                     "image/bmp", "image/x-ms-bmp" -> return BMP
                     "image/svg+xml" -> return SVG
                     "image/heic", "image/heif", "image/heic-sequence", "image/heif-sequence" -> return HEIC
+                    "image/avif" -> return AVIF
                     "image/gif" -> return GIF
+                    "image/x-icon", "image/vnd.microsoft.icon" -> return ICO
                     "application/pdf" -> return PDF
                     "application/vnd.openxmlformats-officedocument.wordprocessingml.document" -> return DOCX
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" -> return XLSX
+                    "application/epub+zip" -> return EPUB
                     "text/html", "application/xhtml+xml" -> return HTML
                     "text/markdown", "text/x-markdown" -> return MD
+                    "text/csv", "text/comma-separated-values" -> return CSV
+                    "application/json", "text/json" -> return JSON
+                    "application/xml", "text/xml" -> return XML
+                    "application/x-yaml", "text/yaml", "text/x-yaml" -> return YAML
+                    "application/x-anywall-vault" -> return ANYWALL_VAULT
                     "text/plain" -> return TXT
                     "video/mp4" -> return MP4
                     "video/x-matroska", "video/matroska" -> return MKV
@@ -276,6 +415,9 @@ enum class SupportedFormat(
                     "audio/aac", "audio/aacp", "audio/x-aac" -> return AAC
                     "audio/mp4", "audio/x-m4a", "audio/m4a" -> return M4A
                     "audio/wav", "audio/x-wav", "audio/wave", "audio/vnd.wave" -> return WAV
+                    "audio/flac", "audio/x-flac" -> return FLAC
+                    "audio/ogg", "application/ogg" -> return OGG
+                    "audio/opus" -> return OPUS
                     "application/zip", "application/x-zip-compressed" -> return ZIP
                     "application/x-tar", "application/tar" -> return TAR
                     "application/x-gtar", "application/x-tgz" -> return TAR_GZ

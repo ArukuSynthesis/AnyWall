@@ -16,6 +16,7 @@ import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.FolderZip
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Movie
+import androidx.compose.material.icons.filled.Security
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.Icon
@@ -37,13 +38,14 @@ import com.anywall.converter.ui.theme.CategoryImageColor
 import com.anywall.converter.ui.theme.CategoryMediaColor
 
 /**
- * Tarjeta de acceso rápido por categoría en `HomeScreen`.
+ * Tarjeta de acceso rápido por categoría en `HomeScreen` (v0.3).
  */
 @Composable
 fun CategoryQuickCard(
     category: FormatCategory,
     onClick: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    isEnglish: Boolean = false
 ) {
     val accentColor = categoryAccentColor(category)
     val icon = categoryIcon(category)
@@ -72,7 +74,7 @@ fun CategoryQuickCard(
             ) {
                 Icon(
                     imageVector = icon,
-                    contentDescription = category.displayNameEs,
+                    contentDescription = category.localizedName(isEnglish),
                     tint = accentColor,
                     modifier = Modifier.size(24.dp)
                 )
@@ -81,7 +83,7 @@ fun CategoryQuickCard(
             Spacer(modifier = Modifier.height(14.dp))
 
             Text(
-                text = category.displayNameEs,
+                text = category.localizedName(isEnglish),
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onSurface,
@@ -92,7 +94,7 @@ fun CategoryQuickCard(
             Spacer(modifier = Modifier.height(4.dp))
 
             Text(
-                text = category.descriptionEs,
+                text = category.localizedDescription(isEnglish),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 2,
@@ -108,6 +110,7 @@ fun categoryAccentColor(category: FormatCategory): Color {
         FormatCategory.DOCUMENT -> CategoryDocumentColor
         FormatCategory.MEDIA -> CategoryMediaColor
         FormatCategory.ARCHIVE -> CategoryArchiveColor
+        FormatCategory.DATA_TOOLS -> Color(0xFF0D9488)
     }
 }
 
@@ -117,5 +120,6 @@ fun categoryIcon(category: FormatCategory): ImageVector {
         FormatCategory.DOCUMENT -> Icons.Default.Description
         FormatCategory.MEDIA -> Icons.Default.Movie
         FormatCategory.ARCHIVE -> Icons.Default.FolderZip
+        FormatCategory.DATA_TOOLS -> Icons.Default.Security
     }
 }

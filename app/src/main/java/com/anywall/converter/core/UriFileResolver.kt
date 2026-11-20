@@ -7,6 +7,7 @@ import android.net.Uri
 import android.provider.DocumentsContract
 import android.provider.OpenableColumns
 import android.webkit.MimeTypeMap
+import androidx.core.content.FileProvider
 import com.anywall.converter.domain.model.InputFileItem
 import com.anywall.converter.domain.model.SupportedFormat
 import java.io.File
@@ -14,13 +15,24 @@ import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.IOException
 import java.io.InputStream
+import java.text.SimpleDateFormat
+import java.util.Date
 import java.util.Locale
 import java.util.UUID
 
 /**
- * Resolutor seguro de URIs (`content://`, árboles de carpetas SAF y `file://`) mediante `ContentResolver` (v0.2).
+ * Entrada individual descubierta al recorrer una carpeta SAF (`OpenDocumentTree`),
+ * preservando su ruta relativa de subcarpeta (v0.3).
+ */
+data class FolderTreeFileEntry(
+    val uri: Uri,
+    val relativeFolderPath: String
+)
+
+/**
+ * Resolutor seguro de URIs (`content://`, árboles de carpetas SAF y `file://`) mediante `ContentResolver` (v0.3).
  * Extrae nombre real, tamaño, tipo MIME, detecta el `SupportedFormat` (incluyendo inspección
- * de cabeceras mágicas como fallback) y gestiona copias temporales en caché.
+ * de cabeceras mágicas como fallback), crea archivos temporales de captura de cámara y gestiona caché.
  */
 class UriFileResolver(private val context: Context) {
 
@@ -44,14 +56,14 @@ class UriFileResolver(private val context: Context) {
 
     /**
      * Recorre una carpeta seleccionada mediante `ActivityResultContracts.OpenDocumentTree`
-     * y devuelve la lista de URIs de todos los archivos encontrados (incluyendo subcarpetas de primer nivel).
+     * y devuelve la lista de entradas con sus rutas de subcarpeta relativas.
      */
-    fun resolveFolderTreeUris(treeUri: Uri, maxFiles: Int = 250): List<Uri> {
+    fun resolveFolderTreeEntries(treeUri: Uri, maxFiles: Int = 250): List<FolderTreeFileEntry> {
         tryTakePersistableReadPermission(treeUri)
-        val collected = mutableListOf<Uri>()
+        val collected = mutableListOf<FolderTreeFileEntry>()
 
-        fun traverseFolder(parentDocId: String, depth: Int) {
-            if (collected.size >= maxFiles || depth > 2) return
+        fun traverseFolder(parentDocId: String, relativePrefix: String, depth: Int) {
+            if (collected.size >= maxFiles || depth > 3) return
             val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, parentDocId)
             try {
                 contentResolver.query(
@@ -78,10 +90,20 @@ class UriFileResolver(private val context: Context) {
                         if (name.startsWith(".")) continue
 
                         if (mime == DocumentsContract.Document.MIME_TYPE_DIR) {
-                            traverseFolder(docId, depth + 1)
+                            val subPath = if (relativePrefix.isEmpty()) {
+                                sanitizeFileName(name)
+                            } else {
+                                "$relativePrefix/${sanitizeFileName(name)}"
+                            }
+                            traverseFolder(docId, subPath, depth + 1)
                         } else {
                             val docUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, docId)
-                            collected.add(docUri)
+                            collected.add(
+                                FolderTreeFileEntry(
+                                    uri = docUri,
+                                    relativeFolderPath = relativePrefix
+                                )
+                            )
                         }
                     }
                 }
@@ -95,15 +117,37 @@ class UriFileResolver(private val context: Context) {
             null
         }
         if (!rootDocId.isNullOrBlank()) {
-            traverseFolder(rootDocId, 0)
+            traverseFolder(rootDocId, "", 0)
         }
         return collected
     }
 
     /**
+     * Compatibilidad directa con llamadas que solo requieren la lista de URIs.
+     */
+    fun resolveFolderTreeUris(treeUri: Uri, maxFiles: Int = 250): List<Uri> {
+        return resolveFolderTreeEntries(treeUri, maxFiles).map { it.uri }
+    }
+
+    /**
+     * Crea una URI segura temporal respaldada por `FileProvider` para capturar una foto/escaneo
+     * con la cámara del sistema (`ActivityResultContracts.TakePicture`) sin requerir permiso `CAMERA`.
+     */
+    fun createCameraCaptureOutputUri(): Uri {
+        val dir = getWorkingTempDir()
+        val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
+        val photoFile = File(dir, "Escaneo_${stamp}.jpg")
+        return FileProvider.getUriForFile(
+            context,
+            "${context.packageName}.fileprovider",
+            photoFile
+        )
+    }
+
+    /**
      * Resuelve una URI a un `InputFileItem` listo para la cola de conversión.
      */
-    fun resolveInputFile(uri: Uri): InputFileItem? {
+    fun resolveInputFile(uri: Uri, relativeFolderPath: String = ""): InputFileItem? {
         tryTakePersistableReadPermission(uri)
 
         var displayName: String? = null
@@ -186,7 +230,8 @@ class UriFileResolver(private val context: Context) {
             displayName = sanitizeFileName(finalName),
             sizeBytes = sizeBytes.coerceAtLeast(0L),
             mimeType = finalMime,
-            format = finalFormat
+            format = finalFormat,
+            relativeFolderPath = relativeFolderPath
         )
     }
 
@@ -270,6 +315,9 @@ class UriFileResolver(private val context: Context) {
             if (read < 4) return null
 
             when {
+                header[0] == 'A'.code.toByte() && header[1] == 'W'.code.toByte() &&
+                    header[2] == 'V'.code.toByte() && header[3] == '1'.code.toByte() -> SupportedFormat.ANYWALL_VAULT
+
                 header[0] == 0x25.toByte() && header[1] == 0x50.toByte() &&
                     header[2] == 0x44.toByte() && header[3] == 0x46.toByte() -> SupportedFormat.PDF
 
@@ -278,6 +326,15 @@ class UriFileResolver(private val context: Context) {
 
                 header[0] == 0xFF.toByte() && header[1] == 0xD8.toByte() &&
                     header[2] == 0xFF.toByte() -> SupportedFormat.JPG
+
+                header[0] == 0x00.toByte() && header[1] == 0x00.toByte() &&
+                    header[2] == 0x01.toByte() && header[3] == 0x00.toByte() -> SupportedFormat.ICO
+
+                header[0] == 'f'.code.toByte() && header[1] == 'L'.code.toByte() &&
+                    header[2] == 'a'.code.toByte() && header[3] == 'C'.code.toByte() -> SupportedFormat.FLAC
+
+                header[0] == 'O'.code.toByte() && header[1] == 'g'.code.toByte() &&
+                    header[2] == 'g'.code.toByte() && header[3] == 'S'.code.toByte() -> SupportedFormat.OGG
 
                 read >= 6 &&
                     header[0] == 0x47.toByte() && header[1] == 0x49.toByte() &&
@@ -299,6 +356,7 @@ class UriFileResolver(private val context: Context) {
                     header[6] == 0x79.toByte() && header[7] == 0x70.toByte() -> {
                     val brand = String(header, 8, 4, Charsets.US_ASCII).lowercase(Locale.ROOT)
                     when {
+                        brand.startsWith("avi") -> SupportedFormat.AVIF
                         brand.startsWith("hei") || brand.startsWith("mif") || brand.startsWith("msf") -> SupportedFormat.HEIC
                         brand.startsWith("m4a") -> SupportedFormat.M4A
                         brand.startsWith("qt") -> SupportedFormat.MOV
@@ -357,12 +415,13 @@ class UriFileResolver(private val context: Context) {
                 .removeSuffix(".tar.gz")
                 .removeSuffix(".tar.xz")
                 .removeSuffix(".tar.bz2")
+                .removeSuffix(".anywall")
                 .let { name ->
                     if (name.contains('.')) name.substringBeforeLast('.') else name
                 }
                 .ifBlank { "anywall_convertido" }
             val cleanExt = extension.trimStart('.').lowercase(Locale.ROOT)
-            return if (cleanExt.isEmpty() || cleanExt == "folder") {
+            return if (cleanExt.isEmpty() || cleanExt == "folder" || cleanExt == "joined") {
                 "$cleanBase$suffix"
             } else {
                 "$cleanBase$suffix.$cleanExt"

@@ -17,6 +17,7 @@ mammoth = "1.5.0"
 commonsCompress = "1.26.1"
 xz = "1.9"
 jump3r = "1.0.5"
+zxingCore = "3.5.3"
 junit = "4.13.2"
 
 [libraries]
@@ -48,6 +49,7 @@ mammoth = { group = "org.zwobble.mammoth", name = "mammoth", version.ref = "mamm
 commons-compress = { group = "org.apache.commons", name = "commons-compress", version.ref = "commonsCompress" }
 xz = { group = "org.tukaani", name = "xz", version.ref = "xz" }
 jump3r = { group = "de.sciss", name = "jump3r", version.ref = "jump3r" }
+zxing-core = { group = "com.google.zxing", name = "core", version.ref = "zxingCore" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 
 [plugins]

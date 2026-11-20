@@ -9,29 +9,45 @@ import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
+import com.anywall.converter.core.AnyWallQuickTileService
 import com.anywall.converter.ui.screens.ConfigureScreen
 import com.anywall.converter.ui.screens.HistoryScreen
 import com.anywall.converter.ui.screens.HomeScreen
 import com.anywall.converter.ui.screens.MainViewModel
 
 /**
- * Grafo de navegación principal de AnyWall (v0.2) en Jetpack Compose.
+ * Grafo de navegación principal de AnyWall (v0.3) en Jetpack Compose.
  */
 @Composable
 fun AnyWallNavHost(
     viewModel: MainViewModel,
+    initialQuickAction: String? = null,
     modifier: Modifier = Modifier,
     navController: NavHostController = rememberNavController()
 ) {
     val configureState by viewModel.configureState.collectAsStateWithLifecycle()
     val allHistory by viewModel.allHistoryRecords.collectAsStateWithLifecycle()
     val filteredHistory by viewModel.filteredHistoryRecords.collectAsStateWithLifecycle()
+    val presets by viewModel.allPresets.collectAsStateWithLifecycle()
     val selectedCategory by viewModel.selectedHistoryCategory.collectAsStateWithLifecycle()
     val searchQuery by viewModel.historySearchQuery.collectAsStateWithLifecycle()
     val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
+    val languageMode by viewModel.languageMode.collectAsStateWithLifecycle()
+    val outputSubfolderMode by viewModel.outputSubfolderMode.collectAsStateWithLifecycle()
+    val customSubfolderName by viewModel.customSubfolderName.collectAsStateWithLifecycle()
+    val biometricHistoryLockEnabled by viewModel.biometricHistoryLockEnabled.collectAsStateWithLifecycle()
+    val historyPinCode by viewModel.historyPinCode.collectAsStateWithLifecycle()
     val autoCleanTempCache by viewModel.autoCleanTempCache.collectAsStateWithLifecycle()
     val defaultStripExif by viewModel.defaultStripExif.collectAsStateWithLifecycle()
     val tempCacheSizeBytes by viewModel.tempCacheSizeBytes.collectAsStateWithLifecycle()
+
+    LaunchedEffect(initialQuickAction) {
+        if (initialQuickAction == AnyWallQuickTileService.ACTION_OPEN_HISTORY) {
+            navController.navigate(AnyWallDestination.HISTORY.route) {
+                launchSingleTop = true
+            }
+        }
+    }
 
     LaunchedEffect(viewModel) {
         viewModel.navigateToConfigureFlow.collect {
@@ -53,16 +69,33 @@ fun AnyWallNavHost(
             HomeScreen(
                 configureState = configureState,
                 recentHistory = allHistory,
+                presets = presets,
                 thumbnailLoader = viewModel.thumbnailLoader,
+                uriResolver = viewModel.uriFileResolver,
+                storageManager = viewModel.scopedStorageManager,
+                forensicHelper = viewModel.forensicMetadataHelper,
                 themeMode = themeMode,
+                languageMode = languageMode,
+                outputSubfolderMode = outputSubfolderMode,
+                customSubfolderName = customSubfolderName,
+                biometricHistoryLockEnabled = biometricHistoryLockEnabled,
+                historyPinCode = historyPinCode,
                 autoCleanTempCache = autoCleanTempCache,
                 defaultStripExif = defaultStripExif,
                 tempCacheSizeBytes = tempCacheSizeBytes,
+                initialOpenToolsDialog = (initialQuickAction == AnyWallQuickTileService.ACTION_OPEN_TOOLS),
                 onSelectThemeMode = viewModel::setThemeMode,
+                onSelectLanguageMode = viewModel::setLanguageMode,
+                onSelectOutputSubfolderMode = viewModel::setOutputSubfolderMode,
+                onUpdateCustomSubfolderName = viewModel::setCustomSubfolderName,
+                onToggleBiometricHistoryLock = viewModel::setBiometricHistoryLockEnabled,
+                onUpdateHistoryPinCode = viewModel::setHistoryPinCode,
                 onToggleAutoCleanCache = viewModel::setAutoCleanTempCache,
                 onToggleDefaultStripExif = viewModel::setDefaultStripExif,
                 onRefreshTempCacheSize = viewModel::refreshTempCacheSize,
                 onClearTempCacheNow = viewModel::clearTempCacheNow,
+                onApplyPreset = viewModel::applyConversionPreset,
+                onCreateCameraUri = viewModel::createCameraCaptureUri,
                 onFilesSelected = { uris ->
                     viewModel.addInputUris(
                         uris = uris,
@@ -97,7 +130,13 @@ fun AnyWallNavHost(
         composable(AnyWallDestination.CONFIGURE.route) {
             ConfigureScreen(
                 state = configureState,
+                presets = presets,
                 thumbnailLoader = viewModel.thumbnailLoader,
+                uriResolver = viewModel.uriFileResolver,
+                storageManager = viewModel.scopedStorageManager,
+                forensicHelper = viewModel.forensicMetadataHelper,
+                archiveEngine = viewModel.archiveEngineImpl,
+                onCreateCameraUri = viewModel::createCameraCaptureUri,
                 onAddMoreFiles = { uris ->
                     viewModel.addInputUris(
                         uris = uris,
@@ -117,8 +156,12 @@ fun AnyWallNavHost(
                 onSortByName = viewModel::sortInputFilesByName,
                 onSortBySize = viewModel::sortInputFilesBySize,
                 onReverseOrder = viewModel::reverseInputFilesOrder,
+                onApplyPreset = viewModel::applyConversionPreset,
+                onSaveNewPreset = viewModel::saveCurrentAsPreset,
                 onApplyVisualPdfEdits = viewModel::applyVisualPdfPageEdits,
                 onClearVisualPdfEdits = viewModel::clearVisualPdfPageEdits,
+                onApplyVisualImageEdits = viewModel::applyVisualImageEdits,
+                onClearVisualImageEdits = viewModel::clearVisualImageEdits,
                 onRemoveFile = viewModel::removeInputFile,
                 onClearAllFiles = viewModel::clearInputFiles,
                 onSelectTargetFormat = viewModel::selectTargetFormat,
@@ -126,17 +169,43 @@ fun AnyWallNavHost(
                 onUpdateMaxDimension = viewModel::updateMaxDimensionPx,
                 onUpdateImageRotation = viewModel::updateImageRotationDegrees,
                 onUpdateStripExif = viewModel::updateStripExifMetadata,
+                onUpdateTargetImageMaxKb = viewModel::updateTargetImageMaxSizeKb,
+                onUpdateImageBatchLayoutMode = viewModel::updateImageBatchLayoutMode,
+                onUpdateAnimatedGifFps = viewModel::updateAnimatedGifFps,
                 onUpdateVideoResolution = viewModel::updateVideoResolution,
                 onUpdateMuteVideoAudio = viewModel::updateMuteVideoAudio,
                 onUpdateTrimStartText = viewModel::updateTrimStartText,
                 onUpdateTrimEndText = viewModel::updateTrimEndText,
+                onUpdateVideoPlaybackSpeed = viewModel::updateVideoPlaybackSpeed,
+                onUpdateVideoRotation = viewModel::updateVideoRotationDegrees,
+                onUpdateVideoFlipHorizontal = viewModel::updateVideoFlipHorizontal,
+                onUpdateTargetVideoMaxMb = viewModel::updateTargetVideoMaxSizeMb,
+                onUpdateMergeMediaSequence = viewModel::updateMergeMediaSequence,
+                onUpdateAudioBitrateKbps = viewModel::updateAudioBitrateKbps,
+                onUpdateAudioFadeSeconds = viewModel::updateAudioFadeSeconds,
+                onUpdateExportAsRingtone = viewModel::updateExportAsRingtone,
                 onUpdateCustomOutputName = viewModel::updateCustomOutputBaseName,
                 onUpdateMergeSinglePdf = viewModel::updateMergeIntoSinglePdf,
                 onUpdatePdfActionMode = viewModel::updatePdfActionMode,
                 onUpdatePageRangeSpec = viewModel::updatePageRangeSpec,
+                onUpdatePdfSplitChunkPages = viewModel::updatePdfSplitChunkPages,
                 onUpdatePdfPassword = viewModel::updatePdfPassword,
                 onUpdatePdfPageSize = viewModel::updatePdfPageSize,
                 onUpdatePdfPageOrientation = viewModel::updatePdfPageOrientation,
+                onUpdatePdfWatermarkText = viewModel::updatePdfWatermarkText,
+                onUpdateAddPdfPageNumbers = viewModel::updateAddPdfPageNumbers,
+                onUpdatePdfSignaturePngPath = viewModel::updatePdfSignaturePngPath,
+                onUpdatePdfStampQrContent = viewModel::updatePdfStampQrContent,
+                onUpdateArchiveCompressionLevel = viewModel::updateArchiveCompressionLevel,
+                onUpdateSelectedArchiveEntries = viewModel::updateSelectedArchiveEntries,
+                onUpdateFileSplitPartSizeMb = viewModel::updateFileSplitPartSizeMb,
+                onUpdatePreserveSubfolderStructure = viewModel::updatePreserveSubfolderStructure,
+                onUpdatePrettyPrintStructuredData = viewModel::updatePrettyPrintStructuredData,
+                onUpdateTextEncoding = viewModel::updateTextEncoding,
+                onUpdateLineEndingOption = viewModel::updateLineEndingOption,
+                onUpdateVaultPassword = viewModel::updateVaultPassword,
+                onUpdateQrCustomText = viewModel::updateQrCustomText,
+                onUpdateSecondaryPipelineAction = viewModel::updateSecondaryPipelineAction,
                 onStartConversion = viewModel::startBatchConversion,
                 onCancelConversion = viewModel::cancelActiveConversion,
                 onNavigateBack = {
@@ -155,9 +224,12 @@ fun AnyWallNavHost(
         composable(AnyWallDestination.HISTORY.route) {
             HistoryScreen(
                 records = filteredHistory,
+                allRecordsForStats = allHistory,
                 thumbnailLoader = viewModel.thumbnailLoader,
                 selectedCategory = selectedCategory,
                 searchQuery = searchQuery,
+                biometricLockEnabled = biometricHistoryLockEnabled,
+                expectedPinCode = historyPinCode,
                 onSelectCategory = viewModel::selectHistoryCategoryFilter,
                 onSearchQueryChange = viewModel::updateHistorySearchQuery,
                 onDeleteRecord = { record ->

@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:shortcutId="quick_converter"
+        android:enabled="true"
+        android:icon="@mipmap/ic_launcher"
+        android:shortcutShortLabel="@string/shortcut_convert_short"
+        android:shortcutLongLabel="@string/shortcut_convert_long">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="com.anywall.converter"
+            android:targetClass="com.anywall.converter.MainActivity">
+            <extra
+                android:name="com.anywall.converter.EXTRA_QUICK_ACTION"
+                android:value="open_converter" />
+        </intent>
+    </shortcut>
+
+    <shortcut
+        android:shortcutId="quick_tools"
+        android:enabled="true"
+        android:icon="@mipmap/ic_launcher"
+        android:shortcutShortLabel="@string/shortcut_tools_short"
+        android:shortcutLongLabel="@string/shortcut_tools_long">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="com.anywall.converter"
+            android:targetClass="com.anywall.converter.MainActivity">
+            <extra
+                android:name="com.anywall.converter.EXTRA_QUICK_ACTION"
+                android:value="open_tools" />
+        </intent>
+    </shortcut>
+
+    <shortcut
+        android:shortcutId="quick_history"
+        android:enabled="true"
+        android:icon="@mipmap/ic_launcher"
+        android:shortcutShortLabel="@string/shortcut_history_short"
+        android:shortcutLongLabel="@string/shortcut_history_long">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="com.anywall.converter"
+            android:targetClass="com.anywall.converter.MainActivity">
+            <extra
+                android:name="com.anywall.converter.EXTRA_QUICK_ACTION"
+                android:value="open_history" />
+        </intent>
+    </shortcut>
+</shortcuts>

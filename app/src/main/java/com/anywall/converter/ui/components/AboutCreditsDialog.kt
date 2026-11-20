@@ -126,6 +126,14 @@ object AnyWallCreditsCatalog {
             roleDescriptionEs = "Motor de codificación de audio MP3 en Java puro basado en LAME 3.98.4."
         ),
         OpenSourceCreditItem(
+            name = "ZXing (\"Zebra Crossing\") Core QR Engine",
+            artifact = "com.google.zxing:core:3.5.3",
+            author = "ZXing Authors & Contributors",
+            license = "Apache License 2.0",
+            repositoryUrl = "https://github.com/zxing/zxing",
+            roleDescriptionEs = "Generación y decodificación 100% offline de matrices de códigos QR en PNG, SVG y sello PDF."
+        ),
+        OpenSourceCreditItem(
             name = "Kotlin Standard Library & Kotlinx Coroutines",
             artifact = "org.jetbrains.kotlin:2.0.21, kotlinx-coroutines-android:1.9.0",
             author = "JetBrains s.r.o. & Contributors",
@@ -205,7 +213,7 @@ fun AboutCreditsDialog(
                                         color = MaterialTheme.colorScheme.onPrimaryContainer
                                     )
                                     Text(
-                                        text = "AnyWall: Universal Converter v0.2",
+                                        text = "AnyWall: Universal Converter v0.3",
                                         style = MaterialTheme.typography.labelMedium,
                                         color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.85f)
                                     )

@@ -23,6 +23,7 @@
 | **Apache Commons Compress** | `org.apache.commons:commons-compress:1.26.1` | The Apache Software Foundation | `Apache-2.0` | https://github.com/apache/commons-compress |
 | **XZ for Java** | `org.tukaani:xz:1.9` | Lasse Collin / Tukaani Project | `0BSD` (Dominio Público) | https://github.com/tukaani-project/xz-java |
 | **jump3r (Java LAME MP3)** | `de.sciss:jump3r:1.0.5` | Hanns Holger Rutz (`Sciss`) / Ken Händel / Proyecto LAME | `LGPL-2.1-or-later` | https://github.com/Sciss/jump3r |
+| **ZXing Core (QR Engine)** | `com.google.zxing:core:3.5.3` | ZXing Authors & Contributors | `Apache-2.0` | https://github.com/zxing/zxing |
 | **Kotlin & Coroutines** | `org.jetbrains.kotlin:2.0.21`, `kotlinx-coroutines-android:1.9.0` | JetBrains s.r.o. | `Apache-2.0` | https://github.com/JetBrains/kotlin |
 
 ---
@@ -50,6 +51,9 @@
 7. **jump3r (`LGPL-2.1-or-later`):**
    - Mantenido por Hanns Holger Rutz (`Sciss`), basado en `jmp3r` de Ken Händel y el codificador LAME. Enlazado como dependencia Maven sin modificaciones (`de.sciss:jump3r:1.0.5`).
    - Código fuente y licencia en https://github.com/Sciss/jump3r.
-8. **Kotlin Standard Library & Coroutines (`Apache-2.0`):**
+8. **ZXing Core (`Apache-2.0`):**
+   - Desarrollado por los autores del proyecto ZXing ("Zebra Crossing") para la codificación y lectura local de códigos QR.
+   - Código fuente y licencia en https://github.com/zxing/zxing.
+9. **Kotlin Standard Library & Coroutines (`Apache-2.0`):**
    - Desarrollados por JetBrains s.r.o.
    - Código fuente y licencia en https://github.com/JetBrains/kotlin y https://github.com/Kotlin/kotlinx.coroutines.

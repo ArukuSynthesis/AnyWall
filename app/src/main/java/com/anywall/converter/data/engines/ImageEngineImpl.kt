@@ -20,7 +20,9 @@ import com.anywall.converter.domain.engine.FileConverterEngine
 import com.anywall.converter.domain.model.ConversionJobResult
 import com.anywall.converter.domain.model.ConversionOptions
 import com.anywall.converter.domain.model.FormatCategory
+import com.anywall.converter.domain.model.ImageBatchLayoutMode
 import com.anywall.converter.domain.model.InputFileItem
+import com.anywall.converter.domain.model.OutputNamingTemplateResolver
 import com.anywall.converter.domain.model.PdfPageEditItem
 import com.anywall.converter.domain.model.SupportedFormat
 import com.caverock.androidsvg.SVG
@@ -38,19 +40,21 @@ import java.io.IOException
 import java.io.OutputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.util.zip.ZipEntry
+import java.util.zip.ZipOutputStream
 import kotlin.coroutines.coroutineContext
 import kotlin.math.max
 import kotlin.math.roundToInt
 
 /**
- * Motor 1: `ImageEngineImpl` (Imágenes y PDF básico - v0.2)
- * - Conversión entre JPG, PNG, WEBP y BMP (más soporte de entrada HEIC/HEIF, GIF y SVG),
- *   respetando porcentaje de calidad (10% - 100%), redimensionado máximo, rotación (0°/90°/180°/270°)
- *   y eliminación de metadatos EXIF/GPS para privacidad total.
- * - Renderizado de SVG a PNG, JPG, WEBP, BMP o PDF usando `com.caverock.androidsvg.SVG`.
- * - Conversión de una o múltiples imágenes a un único archivo PDF mediante `android.graphics.pdf.PdfDocument`
- *   con soporte opcional de cifrado por contraseña.
- * - Extracción de páginas de un PDF a imágenes individuales (JPG, PNG, WEBP, BMP) mediante `android.graphics.pdf.PdfRenderer`.
+ * Motor 1: `ImageEngineImpl` (Imágenes, Editor Visual, Collages, GIF, ICO, IconPack y PDF - v0.3)
+ * - Conversión entre JPG, PNG, WEBP, BMP, ICO, GIF animado y Paquete de Íconos ZIP (`ICON_PACK_ZIP`),
+ *   más soporte de entrada HEIC/HEIF, AVIF, GIF y SVG.
+ * - Aplica ediciones visuales (`ImageEditSpec`): recorte interactivo, volteo H/V, filtros (Grises, Escáner B/N, Invertir),
+ *   censura/pixelado, relación de aspecto con fondo Blur/sólido y marca de agua de texto.
+ * - Compresión inteligente por peso máximo objetivo (`targetImageMaxSizeKb`) mediante búsqueda binaria local.
+ * - Modo Collage (`2x2`, `3x3`) y Tira continua (`Vertical`, `Horizontal`).
+ * - Conversión de imágenes a PDF (con soporte de cifrado) y extracción de páginas PDF a imágenes.
  */
 class ImageEngineImpl(
     private val context: Context,
@@ -62,12 +66,14 @@ class ImageEngineImpl(
         SupportedFormat.JPG,
         SupportedFormat.PNG,
         SupportedFormat.WEBP,
-        SupportedFormat.BMP
+        SupportedFormat.BMP,
+        SupportedFormat.ICO
     )
 
     private val imageInputFormats = rasterOutputFormats + setOf(
         SupportedFormat.SVG,
         SupportedFormat.HEIC,
+        SupportedFormat.AVIF,
         SupportedFormat.GIF
     )
 
@@ -79,22 +85,26 @@ class ImageEngineImpl(
         if (sourceFormats.isEmpty()) return emptyList()
         val distinct = sourceFormats.distinct()
 
-        // Caso 1: Todos los archivos son imágenes (JPG, PNG, WEBP, BMP, SVG, HEIC, GIF)
+        // Caso 1: Todos los archivos son imágenes (JPG, PNG, WEBP, BMP, SVG, HEIC, AVIF, GIF, ICO)
         if (distinct.all { it in imageInputFormats }) {
             return listOf(
                 SupportedFormat.JPG,
                 SupportedFormat.PNG,
                 SupportedFormat.WEBP,
                 SupportedFormat.BMP,
+                SupportedFormat.GIF,
+                SupportedFormat.ICO,
+                SupportedFormat.ICON_PACK_ZIP,
                 SupportedFormat.PDF
             )
         }
 
-        // Caso 2: Todos los archivos son PDF -> permite extraer páginas a JPG o PNG
+        // Caso 2: Todos los archivos son PDF -> permite extraer páginas a JPG, PNG o WEBP
         if (distinct.size == 1 && distinct.first() == SupportedFormat.PDF) {
             return listOf(
                 SupportedFormat.JPG,
-                SupportedFormat.PNG
+                SupportedFormat.PNG,
+                SupportedFormat.WEBP
             )
         }
 
@@ -109,17 +119,35 @@ class ImageEngineImpl(
     ): List<ConversionJobResult> = withContext(Dispatchers.IO) {
         require(inputs.isNotEmpty()) { "La lista de imágenes de entrada está vacía." }
 
-        // Caso A: Extracción de páginas de PDF a imágenes individuales (JPG / PNG)
+        // Caso A: Extracción de páginas de PDF a imágenes individuales
         if (inputs.all { it.format == SupportedFormat.PDF } && targetFormat in rasterOutputFormats) {
             return@withContext extractPdfPagesToImages(inputs, targetFormat, options, onProgress)
         }
 
-        // Caso B: Una o múltiples imágenes a un único PDF (o PDFs separados si mergeIntoSinglePdf == false)
+        // Caso B: Generación de GIF animado desde 1 o múltiples imágenes
+        if (targetFormat == SupportedFormat.GIF) {
+            return@withContext convertImagesToAnimatedGif(inputs, options, onProgress)
+        }
+
+        // Caso C: Generación de Paquete de Íconos (.zip con 48, 96, 192, 512px + favicon.ico)
+        if (targetFormat == SupportedFormat.ICON_PACK_ZIP) {
+            return@withContext convertImagesToIconPacks(inputs, options, onProgress)
+        }
+
+        // Caso D: Modo Collage o Tira continua cuando hay >= 2 imágenes y layout != INDIVIDUAL
+        if (inputs.size >= 2 &&
+            options.imageBatchLayoutMode != ImageBatchLayoutMode.INDIVIDUAL &&
+            (targetFormat in rasterOutputFormats || targetFormat == SupportedFormat.PDF)
+        ) {
+            return@withContext convertImagesToCollageOrStitch(inputs, targetFormat, options, onProgress)
+        }
+
+        // Caso E: Una o múltiples imágenes a PDF
         if (targetFormat == SupportedFormat.PDF) {
             return@withContext convertImagesToPdf(inputs, options, onProgress)
         }
 
-        // Caso C: Conversión de imagen (JPG, PNG, WEBP, BMP, SVG, HEIC, GIF) a formato raster (JPG, PNG, WEBP, BMP)
+        // Caso F: Conversión de imagen a formato raster / ICO
         if (targetFormat in rasterOutputFormats) {
             return@withContext convertImagesToRaster(inputs, targetFormat, options, onProgress)
         }
@@ -137,6 +165,7 @@ class ImageEngineImpl(
     ): List<ConversionJobResult> {
         val results = mutableListOf<ConversionJobResult>()
         val total = inputs.size
+        val editSpec = options.imageEditSpec
 
         inputs.forEachIndexed { index, item ->
             coroutineContext.ensureActive()
@@ -145,10 +174,19 @@ class ImageEngineImpl(
 
             val decoded = decodeInputToBitmap(
                 item = item,
-                maxDimensionPx = options.maxDimensionPx,
+                maxDimensionPx = if (targetFormat == SupportedFormat.ICO) 256 else options.maxDimensionPx,
                 rotationDegrees = options.normalizedRotationDegrees,
                 opaqueWhiteBackground = (targetFormat == SupportedFormat.JPG || targetFormat == SupportedFormat.BMP)
             )
+
+            val edited = try {
+                ImageVisualTransformHelper.applyVisualEditSpec(decoded, editSpec)
+            } finally {
+                // Si applyVisualEditSpec creó un nuevo bitmap, reciclar el original
+            }
+            if (edited !== decoded) {
+                decoded.recycle()
+            }
 
             val tempOut = uriResolver.createTempWorkingFile(
                 prefix = "img_",
@@ -156,36 +194,40 @@ class ImageEngineImpl(
             )
 
             try {
-                FileOutputStream(tempOut).use { fos ->
-                    BufferedOutputStream(fos, 64 * 1024).use { bos ->
-                        encodeBitmapToStream(
-                            bitmap = decoded,
-                            targetFormat = targetFormat,
-                            quality = options.clampedQuality,
-                            output = bos
-                        )
-                    }
-                }
+                encodeBitmapWithTargetSizeConstraint(
+                    bitmap = edited,
+                    targetFormat = targetFormat,
+                    initialQuality = options.clampedQuality,
+                    targetMaxSizeKb = options.targetImageMaxSizeKb,
+                    outputFile = tempOut
+                )
             } finally {
-                decoded.recycle()
+                edited.recycle()
             }
 
-            val baseName = if (options.customOutputBaseName.isNotBlank()) {
-                if (total == 1) options.customOutputBaseName
-                else "${options.customOutputBaseName}_${index + 1}"
-            } else {
-                item.baseNameWithoutExtension
-            }
+            val baseName = OutputNamingTemplateResolver.resolveBaseName(
+                templateOrCustomName = options.customOutputBaseName,
+                originalBaseName = item.baseNameWithoutExtension,
+                batchIndexOneBased = index + 1,
+                batchTotalCount = total,
+                targetFormat = targetFormat
+            )
             val desiredFileName = UriFileResolver.buildOutputFileName(
                 baseName = baseName,
                 extension = targetFormat.extension
+            )
+            val subFolder = storageManager.resolveEffectiveSubFolder(
+                relativeFolderPath = item.relativeFolderPath,
+                categorySubfolder = "Imagenes",
+                preserveTreeOverride = options.preserveSubfolderStructure
             )
 
             val saved = try {
                 storageManager.saveTempFileToDownloads(
                     sourceFile = tempOut,
                     desiredDisplayName = desiredFileName,
-                    mimeType = targetFormat.mimeType
+                    mimeType = targetFormat.mimeType,
+                    subFolder = subFolder
                 )
             } finally {
                 tempOut.delete()
@@ -213,6 +255,395 @@ class ImageEngineImpl(
         return results
     }
 
+    private suspend fun convertImagesToAnimatedGif(
+        inputs: List<InputFileItem>,
+        options: ConversionOptions,
+        onProgress: (Float, String) -> Unit
+    ): List<ConversionJobResult> {
+        val total = inputs.size
+        val editSpec = options.imageEditSpec
+        val maxSide = (options.maxDimensionPx ?: 720).coerceIn(128, 1280)
+        val frames = ArrayList<AnimatedGifPureEncoder.GifFrame>(total)
+
+        inputs.forEachIndexed { idx, item ->
+            coroutineContext.ensureActive()
+            onProgress(
+                (idx.toFloat() / total.toFloat()) * 0.8f,
+                "Preparando fotograma GIF ${idx + 1} de $total: ${item.displayName}"
+            )
+            val raw = decodeInputToBitmap(
+                item = item,
+                maxDimensionPx = maxSide,
+                rotationDegrees = options.normalizedRotationDegrees,
+                opaqueWhiteBackground = true
+            )
+            val edited = ImageVisualTransformHelper.applyVisualEditSpec(raw, editSpec)
+            if (edited !== raw) raw.recycle()
+            try {
+                val w = edited.width
+                val h = edited.height
+                val pixels = IntArray(w * h)
+                edited.getPixels(pixels, 0, w, 0, 0, w, h)
+                frames.add(AnimatedGifPureEncoder.GifFrame(w, h, pixels))
+            } finally {
+                edited.recycle()
+            }
+        }
+
+        onProgress(0.86f, "Codificando GIF animado (${frames.size} fotogramas @ ${options.animatedGifFps} FPS)…")
+        val tempGif = uriResolver.createTempWorkingFile(prefix = "anim_", extension = "gif")
+        val firstInput = inputs.first()
+        val baseName = OutputNamingTemplateResolver.resolveBaseName(
+            templateOrCustomName = options.customOutputBaseName,
+            originalBaseName = if (inputs.size > 1) "${firstInput.baseNameWithoutExtension}_anim" else firstInput.baseNameWithoutExtension,
+            batchIndexOneBased = 1,
+            batchTotalCount = 1,
+            targetFormat = SupportedFormat.GIF
+        )
+        val desiredName = UriFileResolver.buildOutputFileName(baseName, "gif")
+
+        val saved = try {
+            FileOutputStream(tempGif).use { fos ->
+                BufferedOutputStream(fos, 64 * 1024).use { bos ->
+                    AnimatedGifPureEncoder.encodeAnimatedGif(
+                        frames = frames,
+                        fps = options.animatedGifFps,
+                        loopForever = true,
+                        output = bos
+                    )
+                }
+            }
+            storageManager.saveTempFileToDownloads(
+                sourceFile = tempGif,
+                desiredDisplayName = desiredName,
+                mimeType = SupportedFormat.GIF.mimeType,
+                subFolder = storageManager.resolveEffectiveSubFolder(
+                    relativeFolderPath = firstInput.relativeFolderPath,
+                    categorySubfolder = "Imagenes",
+                    preserveTreeOverride = options.preserveSubfolderStructure
+                )
+            )
+        } finally {
+            tempGif.delete()
+        }
+
+        onProgress(1f, "GIF animado generado: ${saved.displayName}")
+        return listOf(
+            ConversionJobResult(
+                sourceDisplayName = if (inputs.size == 1) firstInput.displayName else "${firstInput.displayName} (+${inputs.size - 1} más)",
+                sourceFormat = firstInput.format,
+                sourceSizeBytes = inputs.sumOf { it.sizeBytes },
+                outputDisplayName = saved.displayName,
+                outputFormat = SupportedFormat.GIF,
+                outputCategory = FormatCategory.IMAGE,
+                outputUri = saved.uri,
+                outputAbsolutePath = saved.absolutePath,
+                outputSizeBytes = saved.sizeBytes,
+                outputMimeType = saved.mimeType
+            )
+        )
+    }
+
+    private suspend fun convertImagesToIconPacks(
+        inputs: List<InputFileItem>,
+        options: ConversionOptions,
+        onProgress: (Float, String) -> Unit
+    ): List<ConversionJobResult> {
+        val results = mutableListOf<ConversionJobResult>()
+        val sizes = listOf(48, 96, 192, 512)
+        val total = inputs.size
+        val editSpec = options.imageEditSpec
+
+        inputs.forEachIndexed { idx, item ->
+            coroutineContext.ensureActive()
+            onProgress(
+                idx.toFloat() / total.toFloat(),
+                "Generando paquete de íconos para ${item.displayName}…"
+            )
+            val raw = decodeInputToBitmap(
+                item = item,
+                maxDimensionPx = 1024,
+                rotationDegrees = options.normalizedRotationDegrees,
+                opaqueWhiteBackground = false
+            )
+            val edited = ImageVisualTransformHelper.applyVisualEditSpec(raw, editSpec)
+            if (edited !== raw) raw.recycle()
+
+            val tempZip = uriResolver.createTempWorkingFile(prefix = "iconpack_", extension = "zip")
+            try {
+                FileOutputStream(tempZip).use { fos ->
+                    ZipOutputStream(BufferedOutputStream(fos, 64 * 1024)).use { zos ->
+                        val icoEntries = mutableListOf<IcoPureEncoder.IcoImageEntry>()
+                        for (sz in sizes) {
+                            val scaled = Bitmap.createScaledBitmap(edited, sz, sz, true)
+                            val pngBytes = ByteArrayOutputStream().use { baos ->
+                                scaled.compress(Bitmap.CompressFormat.PNG, 100, baos)
+                                baos.toByteArray()
+                            }
+                            if (scaled !== edited) scaled.recycle()
+
+                            val entryName = "icon_${sz}x${sz}.png"
+                            zos.putNextEntry(ZipEntry(entryName))
+                            zos.write(pngBytes)
+                            zos.closeEntry()
+
+                            if (sz <= 192) {
+                                icoEntries.add(IcoPureEncoder.IcoImageEntry(sz, sz, pngBytes))
+                            }
+                        }
+                        val icoOut = ByteArrayOutputStream()
+                        IcoPureEncoder.writeIco(icoEntries, icoOut)
+                        zos.putNextEntry(ZipEntry("favicon.ico"))
+                        zos.write(icoOut.toByteArray())
+                        zos.closeEntry()
+                        zos.flush()
+                    }
+                }
+            } finally {
+                edited.recycle()
+            }
+
+            val baseName = OutputNamingTemplateResolver.resolveBaseName(
+                templateOrCustomName = options.customOutputBaseName,
+                originalBaseName = "${item.baseNameWithoutExtension}_iconpack",
+                batchIndexOneBased = idx + 1,
+                batchTotalCount = total,
+                targetFormat = SupportedFormat.ZIP
+            )
+            val desiredName = UriFileResolver.buildOutputFileName(baseName, "zip")
+            val saved = try {
+                storageManager.saveTempFileToDownloads(
+                    sourceFile = tempZip,
+                    desiredDisplayName = desiredName,
+                    mimeType = SupportedFormat.ZIP.mimeType,
+                    subFolder = storageManager.resolveEffectiveSubFolder(
+                        relativeFolderPath = item.relativeFolderPath,
+                        categorySubfolder = "Imagenes",
+                        preserveTreeOverride = options.preserveSubfolderStructure
+                    )
+                )
+            } finally {
+                tempZip.delete()
+            }
+
+            results.add(
+                ConversionJobResult(
+                    sourceDisplayName = item.displayName,
+                    sourceFormat = item.format,
+                    sourceSizeBytes = item.sizeBytes,
+                    outputDisplayName = saved.displayName,
+                    outputFormat = SupportedFormat.ICON_PACK_ZIP,
+                    outputCategory = FormatCategory.IMAGE,
+                    outputUri = saved.uri,
+                    outputAbsolutePath = saved.absolutePath,
+                    outputSizeBytes = saved.sizeBytes,
+                    outputMimeType = saved.mimeType
+                )
+            )
+        }
+        onProgress(1f, "Paquete(s) de íconos generados")
+        return results
+    }
+
+    private suspend fun convertImagesToCollageOrStitch(
+        inputs: List<InputFileItem>,
+        targetFormat: SupportedFormat,
+        options: ConversionOptions,
+        onProgress: (Float, String) -> Unit
+    ): List<ConversionJobResult> {
+        val editSpec = options.imageEditSpec
+        val bitmaps = ArrayList<Bitmap>(inputs.size)
+        try {
+            inputs.forEachIndexed { idx, item ->
+                coroutineContext.ensureActive()
+                onProgress(
+                    (idx.toFloat() / inputs.size.toFloat()) * 0.7f,
+                    "Cargando imagen ${idx + 1} de ${inputs.size} para ${options.imageBatchLayoutMode.labelEs}…"
+                )
+                val raw = decodeInputToBitmap(
+                    item = item,
+                    maxDimensionPx = options.maxDimensionPx ?: 1600,
+                    rotationDegrees = options.normalizedRotationDegrees,
+                    opaqueWhiteBackground = true
+                )
+                val edited = ImageVisualTransformHelper.applyVisualEditSpec(raw, editSpec)
+                if (edited !== raw) raw.recycle()
+                bitmaps.add(edited)
+            }
+
+            onProgress(0.78f, "Componiendo ${options.imageBatchLayoutMode.labelEs}…")
+            val composed = ImageVisualTransformHelper.composeBatchCollageOrStitch(
+                bitmaps = bitmaps,
+                layoutMode = options.imageBatchLayoutMode,
+                maxCanvasSidePx = options.maxDimensionPx ?: 2400
+            )
+
+            try {
+                val firstInput = inputs.first()
+                val suffixTag = when (options.imageBatchLayoutMode) {
+                    ImageBatchLayoutMode.COLLAGE_GRID_2X2 -> "_collage2x2"
+                    ImageBatchLayoutMode.COLLAGE_GRID_3X3 -> "_collage3x3"
+                    ImageBatchLayoutMode.STITCH_VERTICAL -> "_tira_v"
+                    ImageBatchLayoutMode.STITCH_HORIZONTAL -> "_tira_h"
+                    ImageBatchLayoutMode.INDIVIDUAL -> ""
+                }
+                val baseName = OutputNamingTemplateResolver.resolveBaseName(
+                    templateOrCustomName = options.customOutputBaseName,
+                    originalBaseName = "${firstInput.baseNameWithoutExtension}$suffixTag",
+                    batchIndexOneBased = 1,
+                    batchTotalCount = 1,
+                    targetFormat = targetFormat
+                )
+
+                if (targetFormat == SupportedFormat.PDF) {
+                    val tempPdf = uriResolver.createTempWorkingFile("collage_", "pdf")
+                    val pdfDoc = PdfDocument()
+                    try {
+                        val pageInfo = PdfDocument.PageInfo.Builder(composed.width, composed.height, 1).create()
+                        val page = pdfDoc.startPage(pageInfo)
+                        page.canvas.drawColor(Color.WHITE)
+                        page.canvas.drawBitmap(composed, 0f, 0f, null)
+                        pdfDoc.finishPage(page)
+                        FileOutputStream(tempPdf).use { fos ->
+                            BufferedOutputStream(fos, 64 * 1024).use { pdfDoc.writeTo(it) }
+                        }
+                    } finally {
+                        pdfDoc.close()
+                    }
+                    if (options.pdfPassword.isNotBlank()) {
+                        encryptPdfFileInPlace(tempPdf, options.pdfPassword)
+                    }
+                    val saved = try {
+                        storageManager.saveTempFileToDownloads(
+                            sourceFile = tempPdf,
+                            desiredDisplayName = UriFileResolver.buildOutputFileName(baseName, "pdf"),
+                            mimeType = SupportedFormat.PDF.mimeType
+                        )
+                    } finally {
+                        tempPdf.delete()
+                    }
+                    onProgress(1f, "Collage PDF generado: ${saved.displayName}")
+                    return listOf(
+                        ConversionJobResult(
+                            sourceDisplayName = "${firstInput.displayName} (+${inputs.size - 1} más)",
+                            sourceFormat = firstInput.format,
+                            sourceSizeBytes = inputs.sumOf { it.sizeBytes },
+                            outputDisplayName = saved.displayName,
+                            outputFormat = SupportedFormat.PDF,
+                            outputCategory = FormatCategory.DOCUMENT,
+                            outputUri = saved.uri,
+                            outputAbsolutePath = saved.absolutePath,
+                            outputSizeBytes = saved.sizeBytes,
+                            outputMimeType = saved.mimeType
+                        )
+                    )
+                } else {
+                    val tempImg = uriResolver.createTempWorkingFile("collage_", targetFormat.extension)
+                    val saved = try {
+                        encodeBitmapWithTargetSizeConstraint(
+                            bitmap = composed,
+                            targetFormat = targetFormat,
+                            initialQuality = options.clampedQuality,
+                            targetMaxSizeKb = options.targetImageMaxSizeKb,
+                            outputFile = tempImg
+                        )
+                        storageManager.saveTempFileToDownloads(
+                            sourceFile = tempImg,
+                            desiredDisplayName = UriFileResolver.buildOutputFileName(baseName, targetFormat.extension),
+                            mimeType = targetFormat.mimeType
+                        )
+                    } finally {
+                        tempImg.delete()
+                    }
+                    onProgress(1f, "${options.imageBatchLayoutMode.labelEs} generado: ${saved.displayName}")
+                    return listOf(
+                        ConversionJobResult(
+                            sourceDisplayName = "${firstInput.displayName} (+${inputs.size - 1} más)",
+                            sourceFormat = firstInput.format,
+                            sourceSizeBytes = inputs.sumOf { it.sizeBytes },
+                            outputDisplayName = saved.displayName,
+                            outputFormat = targetFormat,
+                            outputCategory = FormatCategory.IMAGE,
+                            outputUri = saved.uri,
+                            outputAbsolutePath = saved.absolutePath,
+                            outputSizeBytes = saved.sizeBytes,
+                            outputMimeType = saved.mimeType
+                        )
+                    )
+                }
+            } finally {
+                composed.recycle()
+            }
+        } finally {
+            bitmaps.forEach { if (!it.isRecycled) it.recycle() }
+        }
+    }
+
+    /**
+     * Codifica un `Bitmap` al archivo destino aplicando búsqueda binaria local de calidad
+     * (y escalado progresivo si es necesario) cuando el usuario define `targetMaxSizeKb`.
+     */
+    @Throws(IOException::class)
+    private fun encodeBitmapWithTargetSizeConstraint(
+        bitmap: Bitmap,
+        targetFormat: SupportedFormat,
+        initialQuality: Int,
+        targetMaxSizeKb: Int?,
+        outputFile: File
+    ) {
+        val targetBytes = targetMaxSizeKb?.takeIf { it > 0 }?.let { it.toLong() * 1024L }
+        if (targetBytes == null || targetFormat !in setOf(SupportedFormat.JPG, SupportedFormat.WEBP)) {
+            FileOutputStream(outputFile).use { fos ->
+                BufferedOutputStream(fos, 64 * 1024).use { bos ->
+                    encodeBitmapToStream(bitmap, targetFormat, initialQuality, bos)
+                }
+            }
+            return
+        }
+
+        // Búsqueda binaria de calidad en [12 .. initialQuality]
+        var bestBytes: ByteArray? = null
+        var low = 12
+        var high = initialQuality.coerceIn(12, 100)
+
+        while (low <= high) {
+            val mid = (low + high) / 2
+            val candidate = ByteArrayOutputStream().use { baos ->
+                encodeBitmapToStream(bitmap, targetFormat, mid, baos)
+                baos.toByteArray()
+            }
+            if (candidate.size <= targetBytes) {
+                bestBytes = candidate
+                low = mid + 1
+            } else {
+                if (bestBytes == null) bestBytes = candidate
+                high = mid - 1
+            }
+        }
+
+        // Si aún a calidad 12 supera el peso objetivo, reducir resolución progresivamente
+        var currentBytes = bestBytes ?: ByteArray(0)
+        var scaleFactor = 0.85f
+        var attempt = 0
+        while (currentBytes.size > targetBytes && attempt < 4) {
+            val newW = (bitmap.width * scaleFactor).roundToInt().coerceAtLeast(64)
+            val newH = (bitmap.height * scaleFactor).roundToInt().coerceAtLeast(64)
+            val scaled = Bitmap.createScaledBitmap(bitmap, newW, newH, true)
+            try {
+                currentBytes = ByteArrayOutputStream().use { baos ->
+                    encodeBitmapToStream(scaled, targetFormat, 45, baos)
+                    baos.toByteArray()
+                }
+            } finally {
+                if (scaled !== bitmap) scaled.recycle()
+            }
+            scaleFactor *= 0.8f
+            attempt++
+        }
+
+        FileOutputStream(outputFile).use { it.write(currentBytes) }
+    }
+
     private suspend fun convertImagesToPdf(
         inputs: List<InputFileItem>,
         options: ConversionOptions,
@@ -220,18 +651,22 @@ class ImageEngineImpl(
     ): List<ConversionJobResult> {
         val total = inputs.size
         val mergeSingle = options.mergeIntoSinglePdf || total == 1
+        val editSpec = options.imageEditSpec
 
         if (!mergeSingle) {
             val results = mutableListOf<ConversionJobResult>()
             inputs.forEachIndexed { index, item ->
                 coroutineContext.ensureActive()
+                val resolvedName = OutputNamingTemplateResolver.resolveBaseName(
+                    templateOrCustomName = options.customOutputBaseName,
+                    originalBaseName = item.baseNameWithoutExtension,
+                    batchIndexOneBased = index + 1,
+                    batchTotalCount = total,
+                    targetFormat = SupportedFormat.PDF
+                )
                 val subOptions = options.copy(
                     mergeIntoSinglePdf = true,
-                    customOutputBaseName = if (options.customOutputBaseName.isNotBlank()) {
-                        "${options.customOutputBaseName}_${index + 1}"
-                    } else {
-                        item.baseNameWithoutExtension
-                    }
+                    customOutputBaseName = resolvedName
                 )
                 val singleResult = convertImagesToPdf(
                     inputs = listOf(item),
@@ -262,17 +697,19 @@ class ImageEngineImpl(
                     rotationDegrees = options.normalizedRotationDegrees,
                     opaqueWhiteBackground = true
                 )
+                val editedBitmap = ImageVisualTransformHelper.applyVisualEditSpec(rawBitmap, editSpec)
+                if (editedBitmap !== rawBitmap) rawBitmap.recycle()
 
                 val pageBitmap = if (options.clampedQuality < 98) {
                     val baos = ByteArrayOutputStream()
-                    rawBitmap.compress(Bitmap.CompressFormat.JPEG, options.clampedQuality, baos)
-                    rawBitmap.recycle()
+                    editedBitmap.compress(Bitmap.CompressFormat.JPEG, options.clampedQuality, baos)
+                    editedBitmap.recycle()
                     val bytes = baos.toByteArray()
                     BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: throw IOException(
                         "No se pudo recomprimir la imagen para el PDF: ${item.displayName}"
                     )
                 } else {
-                    rawBitmap
+                    editedBitmap
                 }
 
                 try {
@@ -299,16 +736,22 @@ class ImageEngineImpl(
             pdfDocument.close()
         }
 
-        // Si el usuario especificó contraseña para proteger el PDF resultante, cifrarlo con PDFBox
         if (options.pdfPassword.isNotBlank()) {
             onProgress(0.96f, "Cifrando PDF con contraseña…")
             encryptPdfFileInPlace(tempPdfFile, options.pdfPassword)
         }
 
+        val firstInput = inputs.first()
         val baseName = when {
-            options.customOutputBaseName.isNotBlank() -> options.customOutputBaseName
-            inputs.size == 1 -> inputs.first().baseNameWithoutExtension
-            else -> "${inputs.first().baseNameWithoutExtension}_unido_${inputs.size}_imgs"
+            options.customOutputBaseName.isNotBlank() -> OutputNamingTemplateResolver.resolveBaseName(
+                templateOrCustomName = options.customOutputBaseName,
+                originalBaseName = firstInput.baseNameWithoutExtension,
+                batchIndexOneBased = 1,
+                batchTotalCount = 1,
+                targetFormat = SupportedFormat.PDF
+            )
+            inputs.size == 1 -> firstInput.baseNameWithoutExtension
+            else -> "${firstInput.baseNameWithoutExtension}_unido_${inputs.size}_imgs"
         }
 
         val desiredName = UriFileResolver.buildOutputFileName(baseName, "pdf")
@@ -316,14 +759,18 @@ class ImageEngineImpl(
             storageManager.saveTempFileToDownloads(
                 sourceFile = tempPdfFile,
                 desiredDisplayName = desiredName,
-                mimeType = SupportedFormat.PDF.mimeType
+                mimeType = SupportedFormat.PDF.mimeType,
+                subFolder = storageManager.resolveEffectiveSubFolder(
+                    relativeFolderPath = firstInput.relativeFolderPath,
+                    categorySubfolder = "Documentos",
+                    preserveTreeOverride = options.preserveSubfolderStructure
+                )
             )
         } finally {
             tempPdfFile.delete()
         }
 
         onProgress(1f, "PDF generado: ${saved.displayName}")
-        val firstInput = inputs.first()
         val totalSourceBytes = inputs.sumOf { it.sizeBytes }
         val sourceDesc = if (inputs.size == 1) {
             firstInput.displayName
@@ -369,6 +816,7 @@ class ImageEngineImpl(
     ): List<ConversionJobResult> {
         val results = mutableListOf<ConversionJobResult>()
         val totalFiles = inputs.size
+        val editSpec = options.imageEditSpec
 
         inputs.forEachIndexed { fileIdx, item ->
             coroutineContext.ensureActive()
@@ -383,7 +831,7 @@ class ImageEngineImpl(
 
                         val visualEditsForFile = if (options.hasVisualPdfEdits) {
                             PdfPageEditItem.fromJsonArrayString(options.pdfVisualPageEditsJson)
-                                .filter { it.included && it.sourceUriString == item.uri.toString() }
+                                .filter { it.included && !it.isBlankSeparator && it.sourceUriString == item.uri.toString() }
                         } else {
                             emptyList()
                         }
@@ -435,7 +883,9 @@ class ImageEngineImpl(
                                         null,
                                         PdfRenderer.Page.RENDER_MODE_FOR_PRINT
                                     )
-                                    finalBitmap = rotateBitmapIfNeeded(rawBitmap, combinedRotation)
+                                    val rotated = rotateBitmapIfNeeded(rawBitmap, combinedRotation)
+                                    finalBitmap = ImageVisualTransformHelper.applyVisualEditSpec(rotated, editSpec)
+                                    if (finalBitmap !== rotated) rotated.recycle()
                                 } catch (t: Throwable) {
                                     rawBitmap.recycle()
                                     throw t
@@ -447,16 +897,13 @@ class ImageEngineImpl(
                                         extension = targetFormat.extension
                                     )
                                     try {
-                                        FileOutputStream(tempImg).use { fos ->
-                                            BufferedOutputStream(fos, 64 * 1024).use { bos ->
-                                                encodeBitmapToStream(
-                                                    bitmap = finalBitmap,
-                                                    targetFormat = targetFormat,
-                                                    quality = options.clampedQuality,
-                                                    output = bos
-                                                )
-                                            }
-                                        }
+                                        encodeBitmapWithTargetSizeConstraint(
+                                            bitmap = finalBitmap,
+                                            targetFormat = targetFormat,
+                                            initialQuality = options.clampedQuality,
+                                            targetMaxSizeKb = options.targetImageMaxSizeKb,
+                                            outputFile = tempImg
+                                        )
 
                                         val baseName = if (options.customOutputBaseName.isNotBlank() && totalFiles == 1) {
                                             options.customOutputBaseName
@@ -473,7 +920,12 @@ class ImageEngineImpl(
                                         val saved = storageManager.saveTempFileToDownloads(
                                             sourceFile = tempImg,
                                             desiredDisplayName = outFileName,
-                                            mimeType = targetFormat.mimeType
+                                            mimeType = targetFormat.mimeType,
+                                            subFolder = storageManager.resolveEffectiveSubFolder(
+                                                relativeFolderPath = item.relativeFolderPath,
+                                                categorySubfolder = "Imagenes",
+                                                preserveTreeOverride = options.preserveSubfolderStructure
+                                            )
                                         )
 
                                         results.add(
@@ -626,7 +1078,6 @@ class ImageEngineImpl(
                     }
                 }
             } catch (_: Throwable) {
-                // Fallback a BitmapFactory si ImageDecoder falla en algún archivo específico
             }
         }
 
@@ -724,6 +1175,25 @@ class ImageEngineImpl(
             }
             SupportedFormat.BMP -> {
                 writeBitmapAs24BitBmp(bitmap, output)
+            }
+            SupportedFormat.ICO -> {
+                val maxIcoSide = 256
+                val icoBmp = if (bitmap.width > maxIcoSide || bitmap.height > maxIcoSide) {
+                    scaleDownIfNeeded(bitmap.copy(Bitmap.Config.ARGB_8888, false), maxIcoSide)
+                } else {
+                    bitmap
+                }
+                val pngBytes = ByteArrayOutputStream().use { baos ->
+                    icoBmp.compress(Bitmap.CompressFormat.PNG, 100, baos)
+                    baos.toByteArray()
+                }
+                val w = icoBmp.width
+                val h = icoBmp.height
+                if (icoBmp !== bitmap) icoBmp.recycle()
+                IcoPureEncoder.writeIco(
+                    listOf(IcoPureEncoder.IcoImageEntry(w, h, pngBytes)),
+                    output
+                )
             }
             else -> throw IllegalArgumentException("Formato de imagen no soportado: $targetFormat")
         }

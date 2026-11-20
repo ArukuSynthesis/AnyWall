@@ -2,19 +2,23 @@ package com.anywall.converter.core
 
 import android.content.Context
 import com.anywall.converter.data.engines.ArchiveEngineImpl
+import com.anywall.converter.data.engines.DataAndSecurityEngineImpl
 import com.anywall.converter.data.engines.DocumentEngineImpl
+import com.anywall.converter.data.engines.ForensicMetadataHelper
 import com.anywall.converter.data.engines.ImageEngineImpl
 import com.anywall.converter.data.engines.MediaEngineImpl
 import com.anywall.converter.data.engines.WebViewPdfGenerator
 import com.anywall.converter.data.local.AnyWallDatabase
 import com.anywall.converter.data.local.ConversionHistoryRepositoryImpl
+import com.anywall.converter.data.local.ConversionPresetRepositoryImpl
 import com.anywall.converter.domain.engine.ConverterEngineRegistry
 import com.anywall.converter.domain.engine.FileConverterEngine
 import com.anywall.converter.domain.repository.ConversionHistoryRepository
+import com.anywall.converter.domain.repository.ConversionPresetRepository
 import com.anywall.converter.workers.ConversionWorkScheduler
 
 /**
- * Contenedor de Inyección de Dependencias manual limpia para AnyWall: Universal Converter (v0.2).
+ * Contenedor de Inyección de Dependencias manual limpia para AnyWall: Universal Converter (v0.3).
  * Inicializado en `AnyWallApplication` sin necesidad de Hilt/Dagger.
  */
 class AppContainer(context: Context) {
@@ -34,7 +38,7 @@ class AppContainer(context: Context) {
     }
 
     val scopedStorageManager: ScopedStorageManager by lazy {
-        ScopedStorageManager(appContext)
+        ScopedStorageManager(appContext, appPreferences)
     }
 
     val notificationHelper: NotificationHelper by lazy {
@@ -49,6 +53,19 @@ class AppContainer(context: Context) {
         ConversionHistoryRepositoryImpl(
             dao = database.conversionHistoryDao(),
             storageManager = scopedStorageManager
+        )
+    }
+
+    val presetRepository: ConversionPresetRepository by lazy {
+        ConversionPresetRepositoryImpl(
+            dao = database.conversionPresetDao()
+        )
+    }
+
+    val forensicMetadataHelper: ForensicMetadataHelper by lazy {
+        ForensicMetadataHelper(
+            context = appContext,
+            uriResolver = uriFileResolver
         )
     }
 
@@ -81,10 +98,21 @@ class AppContainer(context: Context) {
         )
     }
 
-    val archiveEngine: FileConverterEngine by lazy {
+    val archiveEngineImpl: ArchiveEngineImpl by lazy {
         ArchiveEngineImpl(
             uriResolver = uriFileResolver,
             storageManager = scopedStorageManager
+        )
+    }
+
+    val archiveEngine: FileConverterEngine
+        get() = archiveEngineImpl
+
+    val dataAndSecurityEngine: FileConverterEngine by lazy {
+        DataAndSecurityEngineImpl(
+            uriResolver = uriFileResolver,
+            storageManager = scopedStorageManager,
+            webViewPdfGenerator = webViewPdfGenerator
         )
     }
 
@@ -93,7 +121,8 @@ class AppContainer(context: Context) {
             imageEngine = imageEngine,
             documentEngine = documentEngine,
             mediaEngine = mediaEngine,
-            archiveEngine = archiveEngine
+            archiveEngine = archiveEngine,
+            dataAndSecurityEngine = dataAndSecurityEngine
         )
     }
 

@@ -33,9 +33,47 @@ data class SavedOutputFile(
  * - En Android 8.0 - 9.0 (API 26-28): Guarda en el directorio público `Downloads/AnyWall/` y expone
  *   una URI segura mediante `FileProvider`.
  */
-class ScopedStorageManager(private val context: Context) {
+class ScopedStorageManager(
+    private val context: Context,
+    private val appPreferences: AppPreferences? = null
+) {
 
     private val contentResolver: ContentResolver = context.contentResolver
+
+    /**
+     * Resuelve la subcarpeta efectiva dentro de `Downloads/AnyWall/` según las preferencias
+     * del usuario (`FLAT`, `BY_CATEGORY`, `PRESERVE_TREE`, `CUSTOM`) y la ruta relativa de origen.
+     */
+    fun resolveEffectiveSubFolder(
+        relativeFolderPath: String = "",
+        categorySubfolder: String? = null,
+        explicitSubFolder: String? = null,
+        preserveTreeOverride: Boolean = false
+    ): String? {
+        val parts = mutableListOf<String>()
+        val mode = appPreferences?.outputSubfolderMode?.value ?: OutputSubfolderMode.FLAT
+        when {
+            mode == OutputSubfolderMode.CUSTOM -> {
+                val custom = appPreferences?.customSubfolderName?.value.orEmpty()
+                if (custom.isNotBlank()) parts.add(custom)
+            }
+            mode == OutputSubfolderMode.BY_CATEGORY && !categorySubfolder.isNullOrBlank() -> {
+                parts.add(categorySubfolder)
+            }
+        }
+        if ((mode == OutputSubfolderMode.PRESERVE_TREE || preserveTreeOverride) && relativeFolderPath.isNotBlank()) {
+            parts.add(relativeFolderPath)
+        }
+        if (!explicitSubFolder.isNullOrBlank()) {
+            parts.add(explicitSubFolder)
+        }
+        return parts
+            .flatMap { it.split('/', '\\') }
+            .map { UriFileResolver.sanitizeFileName(it) }
+            .filter { it.isNotBlank() }
+            .joinToString("/")
+            .takeIf { it.isNotBlank() }
+    }
 
     /**
      * Guarda un archivo temporal local dentro de `Downloads/AnyWall/[subFolder]`.
@@ -51,7 +89,8 @@ class ScopedStorageManager(private val context: Context) {
             throw IOException("El archivo temporal de origen no existe: ${sourceFile.absolutePath}")
         }
         val cleanName = UriFileResolver.sanitizeFileName(desiredDisplayName)
-        val cleanSubFolder = subFolder
+        val effectiveSub = subFolder ?: resolveEffectiveSubFolder()
+        val cleanSubFolder = effectiveSub
             ?.split('/', '\\')
             ?.map { UriFileResolver.sanitizeFileName(it) }
             ?.filter { it.isNotBlank() }

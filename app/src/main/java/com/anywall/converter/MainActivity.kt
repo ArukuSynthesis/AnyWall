@@ -16,18 +16,22 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.anywall.converter.core.AnyWallQuickTileService
 import com.anywall.converter.core.AppThemeMode
 import com.anywall.converter.ui.navigation.AnyWallNavHost
 import com.anywall.converter.ui.screens.MainViewModel
 import com.anywall.converter.ui.theme.AnyWallTheme
 
 /**
- * Actividad principal de AnyWall: Universal Converter (v0.2).
+ * Actividad principal de AnyWall: Universal Converter (v0.3).
  * Gestiona la recepción de archivos compartidos desde Android Share Sheet (`ACTION_SEND`
- * y `ACTION_SEND_MULTIPLE`) y aplica en vivo la preferencia de tema claro/oscuro.
+ * y `ACTION_SEND_MULTIPLE`), accesos rápidos desde App Shortcuts / Quick Settings Tile,
+ * y aplica en vivo la preferencia de tema claro/oscuro.
  */
 class MainActivity : ComponentActivity() {
 
@@ -35,6 +39,8 @@ class MainActivity : ComponentActivity() {
         val app = application as AnyWallApplication
         MainViewModel.provideFactory(app.container)
     }
+
+    private var activeQuickAction by mutableStateOf<String?>(null)
 
     private val notificationPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -47,6 +53,7 @@ class MainActivity : ComponentActivity() {
 
         if (savedInstanceState == null) {
             handleIncomingShareIntent(intent)
+            activeQuickAction = intent?.getStringExtra(AnyWallQuickTileService.EXTRA_QUICK_ACTION)
         }
 
         setContent {
@@ -62,7 +69,10 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    AnyWallNavHost(viewModel = mainViewModel)
+                    AnyWallNavHost(
+                        viewModel = mainViewModel,
+                        initialQuickAction = activeQuickAction
+                    )
                 }
             }
         }
@@ -72,6 +82,7 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         handleIncomingShareIntent(intent)
+        activeQuickAction = intent.getStringExtra(AnyWallQuickTileService.EXTRA_QUICK_ACTION)
     }
 
     private fun handleIncomingShareIntent(incomingIntent: Intent?) {

@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">AnyWall</string>
+    <string name="app_subtitle">Universal Converter</string>
+    <string name="offline_badge">100% Offline • Private</string>
+    <string name="notification_channel_name">AnyWall Conversions</string>
+    <string name="notification_channel_desc">Background progress for local media and document conversions</string>
+    <string name="shortcut_convert_short">Convert</string>
+    <string name="shortcut_convert_long">New offline conversion</string>
+    <string name="shortcut_tools_short">Offline Tools</string>
+    <string name="shortcut_tools_long">QR, AES Vault, Metadata &amp; Diff</string>
+    <string name="shortcut_history_short">History</string>
+    <string name="shortcut_history_long">View conversion history</string>
+    <string name="quick_tile_label">AnyWall Offline</string>
+</resources>
