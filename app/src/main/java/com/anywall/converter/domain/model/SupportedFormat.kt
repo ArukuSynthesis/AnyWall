@@ -3,7 +3,9 @@ package com.anywall.converter.domain.model
 import java.util.Locale
 
 /**
- * Formatos de archivo de entrada y salida soportados de manera 100% local por AnyWall (v0.3).
+ * Formatos de archivo de entrada y salida soportados por AnyWall (v0.4).
+ * Incluye lectura/extracción de `.rar` / `.rar5` (vía `libarchive` BSD-2-Clause, sin salida `.rar`),
+ * empaquetado `.7z`, y cómics `.cbz` (entrada/salida) y `.cbr` (solo entrada).
  */
 enum class SupportedFormat(
     val label: String,
@@ -82,7 +84,7 @@ enum class SupportedFormat(
         category = FormatCategory.IMAGE
     ),
 
-    // Documentos y PDF
+    // Documentos, PDF y Cómics
     PDF(
         label = "PDF",
         extension = "pdf",
@@ -106,6 +108,20 @@ enum class SupportedFormat(
         extension = "epub",
         mimeType = "application/epub+zip",
         category = FormatCategory.DOCUMENT
+    ),
+    CBZ(
+        label = "CBZ",
+        extension = "cbz",
+        mimeType = "application/vnd.comicbook+zip",
+        category = FormatCategory.DOCUMENT,
+        isArchiveOutput = false
+    ),
+    CBR(
+        label = "CBR",
+        extension = "cbr",
+        mimeType = "application/vnd.comicbook-rar",
+        category = FormatCategory.DOCUMENT,
+        isArchiveOutput = false
     ),
     HTML(
         label = "HTML",
@@ -221,6 +237,21 @@ enum class SupportedFormat(
         category = FormatCategory.ARCHIVE,
         isArchiveOutput = true
     ),
+    SEVEN_Z(
+        label = "7Z",
+        extension = "7z",
+        mimeType = "application/x-7z-compressed",
+        category = FormatCategory.ARCHIVE,
+        isArchiveOutput = true
+    ),
+    RAR(
+        label = "RAR",
+        extension = "rar",
+        mimeType = "application/vnd.rar",
+        category = FormatCategory.ARCHIVE,
+        aliases = setOf("rar5", "r00", "r01"),
+        isArchiveOutput = false // Estrictamente solo lectura/extracción con libarchive BSD-2-Clause
+    ),
     TAR(
         label = "TAR",
         extension = "tar",
@@ -270,12 +301,6 @@ enum class SupportedFormat(
         mimeType = "application/x-bzip2",
         category = FormatCategory.ARCHIVE,
         aliases = setOf("bzip2")
-    ),
-    SEVEN_Z(
-        label = "7Z",
-        extension = "7z",
-        mimeType = "application/x-7z-compressed",
-        category = FormatCategory.ARCHIVE
     ),
     FILE_PARTS(
         label = "DIVIDIR PARTES",
@@ -355,6 +380,7 @@ enum class SupportedFormat(
 
     companion object {
         private val PART_EXTENSION_REGEX = Regex("^part\\d+$|^\\d{3}$", RegexOption.IGNORE_CASE)
+        private val RAR_MULTIVOL_REGEX = Regex(".*\\.part\\d+\\.rar$|.*\\.r\\d{2,3}$", RegexOption.IGNORE_CASE)
 
         /**
          * Detecta el formato a partir del nombre del archivo y/o su tipo MIME.
@@ -366,6 +392,9 @@ enum class SupportedFormat(
                 lowerName.endsWith(".tar.xz") || lowerName.endsWith(".txz") -> return TAR_XZ
                 lowerName.endsWith(".tar.bz2") || lowerName.endsWith(".tbz2") || lowerName.endsWith(".tbz") -> return TAR_BZ2
                 lowerName.endsWith(".anywall") || lowerName.endsWith(".awv") -> return ANYWALL_VAULT
+                lowerName.endsWith(".cbz") -> return CBZ
+                lowerName.endsWith(".cbr") -> return CBR
+                RAR_MULTIVOL_REGEX.matches(lowerName) || lowerName.endsWith(".rar") || lowerName.endsWith(".rar5") -> return RAR
             }
 
             val ext = lowerName.substringAfterLast('.', missingDelimiterValue = "")
@@ -399,6 +428,8 @@ enum class SupportedFormat(
                     "application/vnd.openxmlformats-officedocument.wordprocessingml.document" -> return DOCX
                     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" -> return XLSX
                     "application/epub+zip" -> return EPUB
+                    "application/vnd.comicbook+zip", "application/x-cbz" -> return CBZ
+                    "application/vnd.comicbook-rar", "application/x-cbr" -> return CBR
                     "text/html", "application/xhtml+xml" -> return HTML
                     "text/markdown", "text/x-markdown" -> return MD
                     "text/csv", "text/comma-separated-values" -> return CSV
@@ -419,6 +450,7 @@ enum class SupportedFormat(
                     "audio/ogg", "application/ogg" -> return OGG
                     "audio/opus" -> return OPUS
                     "application/zip", "application/x-zip-compressed" -> return ZIP
+                    "application/vnd.rar", "application/x-rar-compressed", "application/x-rar" -> return RAR
                     "application/x-tar", "application/tar" -> return TAR
                     "application/x-gtar", "application/x-tgz" -> return TAR_GZ
                     "application/gzip", "application/x-gzip" -> return GZ

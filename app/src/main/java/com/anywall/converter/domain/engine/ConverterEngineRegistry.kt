@@ -7,11 +7,11 @@ import com.anywall.converter.domain.model.InputFileItem
 import com.anywall.converter.domain.model.SupportedFormat
 
 /**
- * Coordinador central que enruta las solicitudes de conversión al motor apropiado (v0.3):
- * 1. `ImageEngineImpl`
+ * Coordinador central que enruta las solicitudes de conversión al motor apropiado (v0.4):
+ * 1. `ImageEngineImpl` (incluye cómics `.cbz`/`.cbr` ↔ `PDF` / imágenes / `.cbz`)
  * 2. `DocumentEngineImpl`
  * 3. `MediaEngineImpl`
- * 4. `ArchiveEngineImpl`
+ * 4. `ArchiveEngineImpl` (incluye extracción/re-empaquetado de `.rar`/`.rar5` con `libarchive`)
  * 5. `DataAndSecurityEngineImpl`
  */
 class ConverterEngineRegistry(
@@ -62,6 +62,10 @@ class ConverterEngineRegistry(
             result.add(SupportedFormat.ANYWALL_VAULT)
         }
 
+        // Nunca exponer RAR ni CBR como formato de salida
+        result.remove(SupportedFormat.RAR)
+        result.remove(SupportedFormat.CBR)
+
         return result.toList()
     }
 
@@ -93,35 +97,48 @@ class ConverterEngineRegistry(
             }
         }
 
-        // 2. Si el destino es empaquetado (ZIP, TAR, TAR.GZ, TAR.XZ, TAR.BZ2), extracción o particionado (.part001 / JOIN_PARTS) -> ArchiveEngine
+        // 2. Cómics (.cbz / .cbr) hacia PDF, CBZ o imágenes (JPG/PNG/WEBP), o Imágenes/PDF -> CBZ
+        val allComics = sourceFormats.isNotEmpty() &&
+            sourceFormats.all { it == SupportedFormat.CBZ || it == SupportedFormat.CBR }
+        if (allComics && targetFormat in setOf(
+                SupportedFormat.PDF,
+                SupportedFormat.CBZ,
+                SupportedFormat.JPG,
+                SupportedFormat.PNG,
+                SupportedFormat.WEBP
+            )
+        ) {
+            return imageEngine
+        }
+
+        val allImages = sourceFormats.isNotEmpty() &&
+            sourceFormats.all { it.category == FormatCategory.IMAGE }
+        if (allImages && (targetFormat.category == FormatCategory.IMAGE || targetFormat == SupportedFormat.PDF || targetFormat == SupportedFormat.CBZ)) {
+            return imageEngine
+        }
+
+        val allPdfs = sourceFormats.isNotEmpty() && sourceFormats.all { it == SupportedFormat.PDF }
+        if (allPdfs && targetFormat in setOf(SupportedFormat.JPG, SupportedFormat.PNG, SupportedFormat.WEBP, SupportedFormat.CBZ)) {
+            return imageEngine
+        }
+
+        // 3. Si el destino es empaquetado (ZIP, 7Z, TAR, TAR.GZ, TAR.XZ, TAR.BZ2, CBZ desde archivos), extracción o particionado -> ArchiveEngine
         if (targetFormat.isArchiveOutput ||
             targetFormat.isExtractionTarget ||
+            targetFormat == SupportedFormat.CBZ ||
             targetFormat == SupportedFormat.FILE_PARTS ||
             targetFormat == SupportedFormat.JOIN_PARTS
         ) {
             return archiveEngine
         }
 
-        // 3. Si todos los orígenes son imágenes y el destino es imagen (incl. ICON_PACK_ZIP, ICO, GIF) o PDF -> ImageEngine
-        val allImages = sourceFormats.isNotEmpty() &&
-            sourceFormats.all { it.category == FormatCategory.IMAGE }
-        if (allImages && (targetFormat.category == FormatCategory.IMAGE || targetFormat == SupportedFormat.PDF)) {
-            return imageEngine
-        }
-
-        // 4. Si el origen es PDF y el destino es imagen (JPG / PNG / WEBP) -> ImageEngine (PdfRenderer)
-        val allPdfs = sourceFormats.isNotEmpty() && sourceFormats.all { it == SupportedFormat.PDF }
-        if (allPdfs && (targetFormat == SupportedFormat.JPG || targetFormat == SupportedFormat.PNG || targetFormat == SupportedFormat.WEBP)) {
-            return imageEngine
-        }
-
-        // 5. Si los orígenes son video y el destino es GIF / JPG / PNG (extracción de frames) -> MediaEngine
+        // 4. Si los orígenes son video y el destino es GIF / JPG / PNG (extracción de frames) -> MediaEngine
         val allVideos = sourceFormats.isNotEmpty() && sourceFormats.all { it.isVideo }
         if (allVideos && targetFormat in setOf(SupportedFormat.GIF, SupportedFormat.JPG, SupportedFormat.PNG)) {
             return mediaEngine
         }
 
-        // 6. Si los orígenes son documentos/PDF (o lote mixto de imágenes + documentos) y el destino es documental (o CSV/JSON desde XLSX) -> DocumentEngine
+        // 5. Si los orígenes son documentos/PDF (o lote mixto de imágenes + documentos) y el destino es documental -> DocumentEngine
         val allDocsOrImages = sourceFormats.isNotEmpty() &&
             sourceFormats.all { it.category == FormatCategory.DOCUMENT || it.category == FormatCategory.IMAGE }
         if (allDocsOrImages &&
@@ -131,7 +148,7 @@ class ConverterEngineRegistry(
             return documentEngine
         }
 
-        // 7. Si los orígenes son audio/video -> MediaEngine
+        // 6. Si los orígenes son audio/video -> MediaEngine
         val allMedia = sourceFormats.isNotEmpty() &&
             sourceFormats.all { it.category == FormatCategory.MEDIA }
         if (allMedia && targetFormat.category == FormatCategory.MEDIA) {

@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Etiqueta de versión (ej. v0.3)'
+        description: 'Etiqueta de versión (ej. v0.4)'
         required: true
-        default: 'v0.3'
+        default: 'v0.4'
 
 permissions:
   contents: write
@@ -32,13 +32,16 @@ jobs:
       - name: Configurar Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Asegurar Android Build Tools 35.0.0
+      - name: Asegurar Android SDK 35, NDK 27.0.12077973 y CMake 3.22.1
         run: |
           SDK_MANAGER="${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager"
-          if [ -x "$SDK_MANAGER" ]; then
-            yes | "$SDK_MANAGER" --licenses >/dev/null 2>&1 || true
-            "$SDK_MANAGER" "platforms;android-35" "build-tools;35.0.0"
+          if [ ! -x "$SDK_MANAGER" ]; then
+            SDK_MANAGER="$(command -v sdkmanager)"
           fi
+          yes | "$SDK_MANAGER" --licenses >/dev/null 2>&1 || true
+          "$SDK_MANAGER" "platforms;android-35" "build-tools;35.0.0" "ndk;27.0.12077973" "cmake;3.22.1"
+          test -d "${ANDROID_HOME}/ndk/27.0.12077973" || { echo "::error::No se encontró el NDK 27.0.12077973"; exit 1; }
+          test -d "${ANDROID_HOME}/cmake/3.22.1" || { echo "::error::No se encontró CMake 3.22.1"; exit 1; }
 
       - name: Preparar keystore de firma release
         env:
@@ -79,7 +82,7 @@ jobs:
           chmod +x gradlew
           ./gradlew assembleRelease testReleaseUnitTest --no-daemon --stacktrace
 
-      - name: Auditar permisos 100% offline y verificar firma del APK
+      - name: Auditar permisos de red y verificar firma del APK
         id: audit
         run: |
           TAG_NAME="${{ github.ref_type == 'tag' && github.ref_name || inputs.tag }}"
@@ -101,7 +104,7 @@ jobs:
           PERMS="$("${BUILD_TOOLS}/aapt2" dump permissions "$APK_DST")"
           echo "$PERMS"
 
-          if echo "$PERMS" | grep -qE "android\.permission\.(INTERNET|ACCESS_NETWORK_STATE)"; then
+          if echo "$PERMS" | grep -qE "android\.permission\.(INTERNET|ACCESS_NETWORK_STATE|ACCESS_WIFI_STATE)"; then
             echo "::error::Se detectó un permiso de red prohibido en el APK final!"
             exit 1
           fi
@@ -131,14 +134,17 @@ jobs:
           cat > "${RUNNER_TEMP}/release_notes.md" <<EOF
           ## AnyWall: Universal Converter ${TAG}
 
-          Versión release compilada, firmada y auditada automáticamente de **AnyWall: Universal Converter** (\`com.anywall.converter\`), conversor universal **100% offline** para Android desarrollado por **SynthesizerEnd**.
+          Versión release compilada, firmada y auditada automáticamente de **AnyWall: Universal Converter** (\`com.anywall.converter\`), conversor universal para Android desarrollado por **SynthesizerEnd** (licencia \`AGPL-3.0-only\`).
 
-          ### Novedades y Características (${TAG})
-          - **Estrictamente 100% Offline:** 0 permisos de red en el APK final (sin \`INTERNET\` ni \`ACCESS_NETWORK_STATE\`, auditado automáticamente en CI con \`aapt2 dump permissions\`).
-          - **Editor Visual de Imágenes y PDF Profesional:** \`ImageVisualEditorDialog\` (recorte interactivo, volteo, filtro escáner B/N alto contraste, fondo Blur, censura/pixelado y marca de agua), \`PdfVisualEditorDialog\` con duplicación de páginas, páginas separadoras en blanco, censura, **Firma Manuscrita local (\`SignaturePadDialog\`)**, numeración automática, marca de agua diagonal, modo Folleto/Cuadrícula (\`2-en-1\` y \`4-en-1\`) y extractor de imágenes embebidas originales.
-          - **Nuevos Formatos y Motor 5 (\`DataAndSecurityEngineImpl\`):** Soporte en Kotlin puro para hojas de cálculo **\`XLSX\`** y libros **\`EPUB\` (EPUB 3)**, entrada de imagen **\`AVIF\`**, salida **\`.ICO\`**, **\`GIF\` animado** y **Paquete de Íconos ZIP**, entrada de audio **\`FLAC\`/\`OGG\`/\`OPUS\`**, conversión entre **\`CSV\` ↔ \`JSON\` ↔ \`XML\` ↔ \`YAML\` ↔ \`BASE64\`**, **Bóveda Criptográfica Universal \`AES-256-GCM\` (\`.anywall\`)** y **Generador/Escáner QR Offline (\`PNG\`/\`SVG\`)**.
-          - **Audio, Video y Comprimidos Avanzados:** Compresión por peso objetivo (\`KB\` en imágenes y \`MB\` en video), Collages (\`2×2\`, \`3×3\`) y Tiras continuas, concatenación de múltiples videos o audios, velocidad/rotación/espejo de video, Video → GIF/Frames, bitrate de audio (\`128/192/320 kbps\`), Fade In/Out, modo Ringtone, **Explorador Previo de Comprimidos (\`ArchivePreviewDialog\`)** con extracción selectiva y **Divisor/Reconstructor de archivos grandes (\`.part001\`)** con verificación \`SHA-256\`.
-          - **Suite de Herramientas Offline, Presets Room v3 y Automatización:** Inspector Forense de Metadatos (EXIF/GPS/PDF/Media) + Verificador \`SHA-256\`/\`MD5\`, Comparador Local Diff (LCS), Comparador Visual «Antes / Después», Perfiles Rápidos guardables (Room v3), captura desde Cámara/Escáner, plantillas de renombrado (\`{nombre}\`, \`{indice}\`, \`{fecha}\`, \`{formato}\`), Pipelines de 2 pasos, bloqueo biométrico/PIN del historial, interfaz bilingüe (\`ES\`/\`EN\`), App Shortcuts, Quick Settings Tile y créditos Open Source atribuyendo a **SynthesizerEnd**.
+          ### Novedades de v0.4
+          - **Temas:** Sistema, Claro, Oscuro y **Negro AMOLED (\`#000000\`)**, Material You y 6 paletas de acento (Indigo Studio, Esmeralda, Ámbar, Rosa, Cian, Monocromo).
+          - **Cola inteligente:** reordenamiento *Drag & Drop*, Vista Rápida (\`QuickPeekDialog\`), estimador de tamaño de salida y **Smart Share Sheet** con acciones según MIME.
+          - **Estudio de Fotos 100% táctil:** recorte con 8 tiradores, dial de enderezado \`-45°..+45°\`, proporciones, escáner de perspectiva de 4 esquinas con lupa 2.5×, ajustes en vivo, filtros con miniaturas reales, censura con pincel/rectángulos, texto interactivo, Deshacer/Rehacer, Antes/Después y "Aplicar a todo el lote".
+          - **\`.rar\` / \`.rar5\` con \`libarchive\` (\`BSD-2-Clause\`, NDK):** exploración, extracción selectiva, contraseñas, multivolumen \`.part1.rar\`, anti-Zip-Slip y re-empaquetado en 1 paso a \`.zip\`, \`.7z\`, \`.tar.gz\`, \`.tar.xz\`, \`.tar.bz2\`. Cómics \`.cbz\`/\`.cbr\` ↔ PDF / imágenes / \`.cbz\`.
+          - **Video y audio táctil:** línea de tiempo con fotogramas o forma de onda, captura de fotograma exacto, recorte de encuadre (\`media3.effect.Crop\`), Auto-Gain \`-1.0 dBFS\` y etiquetas ID3v2.3 + carátula.
+          - **Estudio PDF táctil:** *Drag & Drop* de páginas, *pinch-to-zoom*, firma arrastrable/redimensionable, censura con el dedo, texto, sello de fecha y resaltador translúcido.
+          - **Herramientas y actualizador:** renombrador masivo con vista previa, limpiador de duplicados por \`SHA-256\` y actualizador provisional desde GitHub Releases (\`GitHubUpdaterDialog\`) con verificador local de APK + \`SHA-256\`.
+          - **0 permisos de red** en el APK final (\`INTERNET\`, \`ACCESS_NETWORK_STATE\`, \`ACCESS_WIFI_STATE\`), auditado en CI con \`aapt2 dump permissions\`.
 
           ### Descarga e integridad
           - **Archivo:** \`${APK_NAME}\` (${SIZE_HR}, firmado con APK Signature Scheme v2)

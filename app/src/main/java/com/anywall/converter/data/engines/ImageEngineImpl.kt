@@ -77,8 +77,13 @@ class ImageEngineImpl(
         SupportedFormat.GIF
     )
 
+    private val comicInputFormats = setOf(
+        SupportedFormat.CBZ,
+        SupportedFormat.CBR
+    )
+
     override fun canHandle(format: SupportedFormat): Boolean {
-        return format in imageInputFormats || format == SupportedFormat.PDF
+        return format in imageInputFormats || format == SupportedFormat.PDF || format in comicInputFormats
     }
 
     override fun getSupportedTargetFormats(sourceFormats: List<SupportedFormat>): List<SupportedFormat> {
@@ -95,13 +100,26 @@ class ImageEngineImpl(
                 SupportedFormat.GIF,
                 SupportedFormat.ICO,
                 SupportedFormat.ICON_PACK_ZIP,
-                SupportedFormat.PDF
+                SupportedFormat.PDF,
+                SupportedFormat.CBZ
             )
         }
 
-        // Caso 2: Todos los archivos son PDF -> permite extraer páginas a JPG, PNG o WEBP
+        // Caso 2: Todos los archivos son PDF -> permite extraer páginas a JPG, PNG, WEBP o convertir a cómic CBZ
         if (distinct.size == 1 && distinct.first() == SupportedFormat.PDF) {
             return listOf(
+                SupportedFormat.JPG,
+                SupportedFormat.PNG,
+                SupportedFormat.WEBP,
+                SupportedFormat.CBZ
+            )
+        }
+
+        // Caso 3: Cómics CBZ / CBR -> convertir a PDF, CBZ o extraer páginas a JPG / PNG / WEBP
+        if (distinct.all { it in comicInputFormats }) {
+            return listOf(
+                SupportedFormat.PDF,
+                SupportedFormat.CBZ,
                 SupportedFormat.JPG,
                 SupportedFormat.PNG,
                 SupportedFormat.WEBP
@@ -119,7 +137,17 @@ class ImageEngineImpl(
     ): List<ConversionJobResult> = withContext(Dispatchers.IO) {
         require(inputs.isNotEmpty()) { "La lista de imágenes de entrada está vacía." }
 
-        // Caso A: Extracción de páginas de PDF a imágenes individuales
+        // Caso 0: Cómics (.cbz / .cbr) -> PDF, CBZ o imágenes (JPG/PNG/WEBP)
+        if (inputs.all { it.format in comicInputFormats }) {
+            return@withContext convertComicArchives(inputs, targetFormat, options, onProgress)
+        }
+
+        // Caso A1: PDF -> Cómic CBZ
+        if (inputs.all { it.format == SupportedFormat.PDF } && targetFormat == SupportedFormat.CBZ) {
+            return@withContext convertPdfsToCbz(inputs, options, onProgress)
+        }
+
+        // Caso A2: Extracción de páginas de PDF a imágenes individuales
         if (inputs.all { it.format == SupportedFormat.PDF } && targetFormat in rasterOutputFormats) {
             return@withContext extractPdfPagesToImages(inputs, targetFormat, options, onProgress)
         }
@@ -132,6 +160,11 @@ class ImageEngineImpl(
         // Caso C: Generación de Paquete de Íconos (.zip con 48, 96, 192, 512px + favicon.ico)
         if (targetFormat == SupportedFormat.ICON_PACK_ZIP) {
             return@withContext convertImagesToIconPacks(inputs, options, onProgress)
+        }
+
+        // Caso C2: Empaquetado de imágenes en cómic .cbz
+        if (targetFormat == SupportedFormat.CBZ) {
+            return@withContext convertImagesToCbz(inputs, options, onProgress)
         }
 
         // Caso D: Modo Collage o Tira continua cuando hay >= 2 imágenes y layout != INDIVIDUAL
@@ -1248,6 +1281,289 @@ class ImageEngineImpl(
             }
             output.write(rowBuffer)
         }
+    }
+
+    /**
+     * Empaqueta una lista de imágenes en un archivo de cómic `.cbz` con páginas numeradas secuencialmente.
+     */
+    private suspend fun convertImagesToCbz(
+        inputs: List<InputFileItem>,
+        options: ConversionOptions,
+        onProgress: (Float, String) -> Unit
+    ): List<ConversionJobResult> {
+        val tempCbz = uriResolver.createTempWorkingFile("comic_", "cbz")
+        val editSpec = options.imageEditSpec
+        val total = inputs.size
+        val padDigits = if (total >= 100) 4 else 3
+
+        try {
+            FileOutputStream(tempCbz).use { fos ->
+                ZipOutputStream(BufferedOutputStream(fos, 64 * 1024)).use { zos ->
+                    inputs.forEachIndexed { idx, item ->
+                        coroutineContext.ensureActive()
+                        onProgress(
+                            (idx.toFloat() / total.toFloat()) * 0.90f,
+                            "Añadiendo página ${idx + 1} de $total al cómic CBZ…"
+                        )
+                        val decoded = decodeInputToBitmap(
+                            item = item,
+                            maxDimensionPx = options.maxDimensionPx,
+                            rotationDegrees = options.normalizedRotationDegrees,
+                            opaqueWhiteBackground = true
+                        )
+                        val edited = ImageVisualTransformHelper.applyVisualEditSpec(decoded, editSpec)
+                        if (edited !== decoded) decoded.recycle()
+
+                        try {
+                            val pageNum = (idx + 1).toString().padStart(padDigits, '0')
+                            val entryName = "page_${pageNum}.jpg"
+                            zos.putNextEntry(ZipEntry(entryName))
+                            edited.compress(Bitmap.CompressFormat.JPEG, options.clampedQuality, zos)
+                            zos.closeEntry()
+                        } finally {
+                            edited.recycle()
+                        }
+                    }
+                    zos.flush()
+                }
+            }
+
+            val first = inputs.first()
+            val baseName = OutputNamingTemplateResolver.resolveBaseName(
+                templateOrCustomName = options.customOutputBaseName,
+                originalBaseName = if (inputs.size > 1) "${first.baseNameWithoutExtension}_comic" else first.baseNameWithoutExtension,
+                batchIndexOneBased = 1,
+                batchTotalCount = 1,
+                targetFormat = SupportedFormat.CBZ
+            )
+            val saved = storageManager.saveTempFileToDownloads(
+                sourceFile = tempCbz,
+                desiredDisplayName = UriFileResolver.buildOutputFileName(baseName, "cbz"),
+                mimeType = SupportedFormat.CBZ.mimeType
+            )
+            onProgress(1f, "Cómic CBZ generado: ${saved.displayName}")
+            return listOf(
+                ConversionJobResult(
+                    sourceDisplayName = if (inputs.size == 1) first.displayName else "${first.displayName} (+${inputs.size - 1} págs.)",
+                    sourceFormat = first.format,
+                    sourceSizeBytes = inputs.sumOf { it.sizeBytes },
+                    outputDisplayName = saved.displayName,
+                    outputFormat = SupportedFormat.CBZ,
+                    outputCategory = FormatCategory.DOCUMENT,
+                    outputUri = saved.uri,
+                    outputAbsolutePath = saved.absolutePath,
+                    outputSizeBytes = saved.sizeBytes,
+                    outputMimeType = saved.mimeType
+                )
+            )
+        } finally {
+            tempCbz.delete()
+        }
+    }
+
+    /**
+     * Convierte uno o varios documentos PDF en archivos de cómic `.cbz` renderizando sus páginas.
+     */
+    private suspend fun convertPdfsToCbz(
+        inputs: List<InputFileItem>,
+        options: ConversionOptions,
+        onProgress: (Float, String) -> Unit
+    ): List<ConversionJobResult> {
+        val results = mutableListOf<ConversionJobResult>()
+        val totalPdfs = inputs.size
+
+        inputs.forEachIndexed { pdfIdx, item ->
+            coroutineContext.ensureActive()
+            val tempPdf = uriResolver.copyUriToTempFile(item.uri, "pdf2cbz_in_", "pdf")
+            val tempCbz = uriResolver.createTempWorkingFile("pdf2cbz_out_", "cbz")
+            try {
+                ParcelFileDescriptor.open(tempPdf, ParcelFileDescriptor.MODE_READ_ONLY).use { pfd ->
+                    PdfRenderer(pfd).use { renderer ->
+                        val pageCount = renderer.pageCount.coerceAtLeast(1)
+                        val indices = parsePageIndices(options.pageRangeSpec, pageCount)
+                        val padDigits = if (indices.size >= 100) 4 else 3
+
+                        FileOutputStream(tempCbz).use { fos ->
+                            ZipOutputStream(BufferedOutputStream(fos, 64 * 1024)).use { zos ->
+                                indices.forEachIndexed { i, pageIndex ->
+                                    coroutineContext.ensureActive()
+                                    val p = (pdfIdx.toFloat() + (i.toFloat() / indices.size.toFloat()) * 0.9f) / totalPdfs
+                                    onProgress(p, "Renderizando pág. ${pageIndex + 1} de ${item.displayName} a CBZ…")
+
+                                    renderer.openPage(pageIndex).use { page ->
+                                        val maxSide = (options.maxDimensionPx ?: 1600).coerceIn(600, 3200)
+                                        val scale = minOf(
+                                            maxSide.toFloat() / page.width.coerceAtLeast(1),
+                                            maxSide.toFloat() / page.height.coerceAtLeast(1)
+                                        ).coerceAtLeast(1f)
+                                        val bmpW = (page.width * scale).roundToInt().coerceAtLeast(1)
+                                        val bmpH = (page.height * scale).roundToInt().coerceAtLeast(1)
+                                        val bmp = Bitmap.createBitmap(bmpW, bmpH, Bitmap.Config.ARGB_8888)
+                                        try {
+                                            val canvas = Canvas(bmp)
+                                            canvas.drawColor(Color.WHITE)
+                                            page.render(bmp, Rect(0, 0, bmpW, bmpH), null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                                            val entryName = "page_${(i + 1).toString().padStart(padDigits, '0')}.jpg"
+                                            zos.putNextEntry(ZipEntry(entryName))
+                                            bmp.compress(Bitmap.CompressFormat.JPEG, options.clampedQuality, zos)
+                                            zos.closeEntry()
+                                        } finally {
+                                            bmp.recycle()
+                                        }
+                                    }
+                                }
+                                zos.flush()
+                            }
+                        }
+                    }
+                }
+
+                val baseName = OutputNamingTemplateResolver.resolveBaseName(
+                    templateOrCustomName = options.customOutputBaseName,
+                    originalBaseName = item.baseNameWithoutExtension,
+                    batchIndexOneBased = pdfIdx + 1,
+                    batchTotalCount = totalPdfs,
+                    targetFormat = SupportedFormat.CBZ
+                )
+                val saved = storageManager.saveTempFileToDownloads(
+                    sourceFile = tempCbz,
+                    desiredDisplayName = UriFileResolver.buildOutputFileName(baseName, "cbz"),
+                    mimeType = SupportedFormat.CBZ.mimeType
+                )
+                results.add(
+                    ConversionJobResult(
+                        sourceDisplayName = item.displayName,
+                        sourceFormat = item.format,
+                        sourceSizeBytes = item.sizeBytes,
+                        outputDisplayName = saved.displayName,
+                        outputFormat = SupportedFormat.CBZ,
+                        outputCategory = FormatCategory.DOCUMENT,
+                        outputUri = saved.uri,
+                        outputAbsolutePath = saved.absolutePath,
+                        outputSizeBytes = saved.sizeBytes,
+                        outputMimeType = saved.mimeType
+                    )
+                )
+            } finally {
+                tempPdf.delete()
+                tempCbz.delete()
+            }
+        }
+        onProgress(1f, "Conversión de PDF a CBZ completada.")
+        return results
+    }
+
+    /**
+     * Convierte archivos de cómic `.cbz` o `.cbr` hacia `PDF`, `.cbz` o imágenes individuales (`JPG`/`PNG`/`WEBP`).
+     */
+    private suspend fun convertComicArchives(
+        inputs: List<InputFileItem>,
+        targetFormat: SupportedFormat,
+        options: ConversionOptions,
+        onProgress: (Float, String) -> Unit
+    ): List<ConversionJobResult> {
+        val allResults = mutableListOf<ConversionJobResult>()
+        val passphrase = options.archivePassword.ifBlank { options.vaultPassword }
+
+        inputs.forEachIndexed { comicIdx, comicItem ->
+            coroutineContext.ensureActive()
+            val tempDir = File(uriResolver.getWorkingTempDir(), "comic_ext_${System.currentTimeMillis()}_$comicIdx")
+            tempDir.mkdirs()
+
+            try {
+                onProgress(
+                    comicIdx.toFloat() / inputs.size.toFloat(),
+                    "Extrayendo páginas del cómic ${comicItem.displayName}…"
+                )
+                val extractedFiles = mutableListOf<File>()
+                if (comicItem.format == SupportedFormat.CBR) {
+                    val tempCbr = uriResolver.copyUriToTempFile(comicItem.uri, "cbr_in_", "cbr")
+                    try {
+                        extractedFiles.addAll(
+                            LibArchiveRarBridge.extractRarArchive(
+                                volumeFiles = listOf(tempCbr),
+                                outputDir = tempDir,
+                                originalNames = listOf(comicItem.displayName),
+                                selectedEntries = options.selectedArchiveEntries,
+                                passphrase = passphrase
+                            )
+                        )
+                    } finally {
+                        tempCbr.delete()
+                    }
+                } else {
+                    // CBZ (contenedor ZIP)
+                    uriResolver.openInputStream(comicItem.uri).use { raw ->
+                        org.apache.commons.compress.archivers.zip.ZipArchiveInputStream(
+                            java.io.BufferedInputStream(raw, 64 * 1024),
+                            "UTF-8",
+                            true,
+                            true
+                        ).use { zipIn ->
+                            var entry = zipIn.nextEntry
+                            while (entry != null) {
+                                coroutineContext.ensureActive()
+                                if (!entry.isDirectory) {
+                                    val dest = LibArchiveRarBridge.resolveSafeDestinationFile(tempDir, entry.name)
+                                    dest.parentFile?.mkdirs()
+                                    FileOutputStream(dest).use { fos -> zipIn.copyTo(fos, 64 * 1024) }
+                                    extractedFiles.add(dest)
+                                }
+                                entry = zipIn.nextEntry
+                            }
+                        }
+                    }
+                }
+
+                val imagePages = extractedFiles.filter { f ->
+                    val fmt = SupportedFormat.detect(f.name, null)
+                    fmt != null && fmt.category == FormatCategory.IMAGE
+                }.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.relativeTo(tempDir).path })
+
+                if (imagePages.isEmpty()) {
+                    throw IOException("El archivo de cómic '${comicItem.displayName}' no contiene imágenes válidas.")
+                }
+
+                val pageInputItems = imagePages.map { imgFile ->
+                    val fmt = SupportedFormat.detect(imgFile.name, null) ?: SupportedFormat.JPG
+                    InputFileItem(
+                        uri = Uri.fromFile(imgFile),
+                        displayName = imgFile.name,
+                        sizeBytes = imgFile.length(),
+                        mimeType = fmt.mimeType,
+                        format = fmt,
+                        relativeFolderPath = comicItem.baseNameWithoutExtension
+                    )
+                }
+
+                val subOptions = options.copy(
+                    mergeIntoSinglePdf = true,
+                    preserveSubfolderStructure = true,
+                    customOutputBaseName = options.customOutputBaseName.ifBlank { comicItem.baseNameWithoutExtension }
+                )
+
+                val converted = when (targetFormat) {
+                    SupportedFormat.PDF -> convertImagesToPdf(pageInputItems, subOptions, onProgress)
+                    SupportedFormat.CBZ -> convertImagesToCbz(pageInputItems, subOptions, onProgress)
+                    in rasterOutputFormats -> convertImagesToRaster(pageInputItems, targetFormat, subOptions, onProgress)
+                    else -> throw IllegalArgumentException("Destino no soportado para cómic: $targetFormat")
+                }
+
+                allResults.addAll(
+                    converted.map { res ->
+                        res.copy(
+                            sourceDisplayName = comicItem.displayName,
+                            sourceFormat = comicItem.format,
+                            sourceSizeBytes = if (converted.size == 1) comicItem.sizeBytes else (comicItem.sizeBytes / converted.size.coerceAtLeast(1))
+                        )
+                    }
+                )
+            } finally {
+                tempDir.deleteRecursively()
+            }
+        }
+        onProgress(1f, "Conversión de cómic completada.")
+        return allResults
     }
 
     companion object {

@@ -21,6 +21,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.SystemUpdate
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -32,6 +34,10 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -58,7 +64,7 @@ data class OpenSourceCreditItem(
 object AnyWallCreditsCatalog {
     const val DEVELOPER_NAME = "SynthesizerEnd"
     const val PROJECT_REPOSITORY_URL = "https://github.com/ArukuSynthesis/AnyWall"
-    const val PROJECT_LICENSE = "GNU Affero General Public License v3.0 (AGPL-3.0)"
+    const val PROJECT_LICENSE = "GNU Affero General Public License v3.0 (AGPL-3.0-only)"
 
     val thirdPartyLibraries: List<OpenSourceCreditItem> = listOf(
         OpenSourceCreditItem(
@@ -131,7 +137,15 @@ object AnyWallCreditsCatalog {
             author = "ZXing Authors & Contributors",
             license = "Apache License 2.0",
             repositoryUrl = "https://github.com/zxing/zxing",
-            roleDescriptionEs = "Generación y decodificación 100% offline de matrices de códigos QR en PNG, SVG y sello PDF."
+            roleDescriptionEs = "Generación y decodificación local de matrices de códigos QR en PNG, SVG y sello PDF."
+        ),
+        OpenSourceCreditItem(
+            name = "libarchive (C/NDK Native Archive Reader)",
+            artifact = "libarchive v3.7.7 (CMake / NDK JNI)",
+            author = "Tim Kientzle, Martin Matuska & libarchive Contributors",
+            license = "BSD 2-Clause License (BSD-2-Clause)",
+            repositoryUrl = "https://github.com/libarchive/libarchive",
+            roleDescriptionEs = "Motor nativo C/C++ compilado con Android NDK para lectura y extracción de archivos .rar, .rar5 y .cbr (incluyendo soporte de contraseñas y volúmenes divididos)."
         ),
         OpenSourceCreditItem(
             name = "Kotlin Standard Library & Kotlinx Coroutines",
@@ -145,14 +159,22 @@ object AnyWallCreditsCatalog {
 }
 
 /**
- * Diálogo 100% offline de Créditos, Autoría (`SynthesizerEnd`) y Licencias de Código Abierto.
- * Permite copiar las URLs de los repositorios al portapapeles sin realizar conexiones de red.
+ * Diálogo de Créditos, Autoría (`SynthesizerEnd`) y Licencias de Código Abierto.
+ * Permite copiar las URLs de los repositorios al portapapeles.
  */
 @Composable
 fun AboutCreditsDialog(
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
+    var showGitHubUpdater by remember { mutableStateOf(false) }
+
+    if (showGitHubUpdater) {
+        GitHubUpdaterDialog(
+            isEn = false,
+            onDismiss = { showGitHubUpdater = false }
+        )
+    }
 
     fun copyToClipboard(label: String, text: String) {
         val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
@@ -169,8 +191,6 @@ fun AboutCreditsDialog(
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.ExtraBold
                 )
-                Spacer(modifier = Modifier.height(4.dp))
-                OfflinePrivacyBadge()
             }
         },
         text = {
@@ -213,7 +233,7 @@ fun AboutCreditsDialog(
                                         color = MaterialTheme.colorScheme.onPrimaryContainer
                                     )
                                     Text(
-                                        text = "AnyWall: Universal Converter v0.3",
+                                        text = "AnyWall: Universal Converter v0.4",
                                         style = MaterialTheme.typography.labelMedium,
                                         color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.85f)
                                     )
@@ -246,6 +266,19 @@ fun AboutCreditsDialog(
                                 style = MaterialTheme.typography.labelMedium,
                                 color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.9f)
                             )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            FilledTonalButton(
+                                onClick = { showGitHubUpdater = true },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.SystemUpdate,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Buscar actualizaciones en GitHub")
+                            }
                         }
                     }
                 }
@@ -270,7 +303,7 @@ fun AboutCreditsDialog(
                         )
                     }
                     Text(
-                        text = "AnyWall reconoce y agradece a los autores de los siguientes proyectos open source que hacen posible el procesamiento 100% local:",
+                        text = "AnyWall reconoce y agradece a los autores de los siguientes proyectos open source que hacen posible AnyWall:",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )

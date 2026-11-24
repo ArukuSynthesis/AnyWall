@@ -3,6 +3,7 @@ package com.anywall.converter.data.engines
 import android.media.MediaCodec
 import android.media.MediaExtractor
 import android.media.MediaFormat
+import com.anywall.converter.domain.model.AudioMetadataSpec
 import de.sciss.jump3r.mp3.BitStream
 import de.sciss.jump3r.mp3.GainAnalysis
 import de.sciss.jump3r.mp3.GetAudio
@@ -23,6 +24,7 @@ import de.sciss.jump3r.mpg.Common
 import de.sciss.jump3r.mpg.Interface
 import de.sciss.jump3r.mpg.MPGLib
 import java.io.BufferedOutputStream
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
@@ -30,14 +32,21 @@ import java.io.IOException
 import java.io.RandomAccessFile
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import kotlin.math.abs
+import kotlin.math.max
+import kotlin.math.pow
+import kotlin.math.roundToInt
 
 /**
- * Procesador local de bajo nivel para:
+ * Procesador de audio de bajo nivel (v0.4) para:
  * 1. Extracción de flujo ADTS `.aac` desde contenedor MP4/M4A generado por Media3 Transformer.
  * 2. Decodificación de audio a PCM 16-bit Little-Endian mediante `MediaExtractor` + `MediaCodec`.
- * 3. Escritura de archivos `.wav` (RIFF WAVE PCM 16-bit).
- * 4. Codificación a `.mp3` 100% en Java puro usando el motor LAME (`de.sciss.jump3r.mp3.Lame`)
- *    sin depender de `javax.sound.sampled` (ausente en Android).
+ * 3. Normalización automática de volumen (`Auto-Gain` a `-1.0 dBFS`) sobre muestras PCM 16-bit LE.
+ * 4. Extracción de picos de forma de onda (`extractWaveformPeaksFromPcmFile`) para `MediaTimelineTrimmerDialog`.
+ * 5. Escritura de archivos `.wav` (RIFF WAVE PCM 16-bit).
+ * 6. Codificación a `.mp3` en Java puro usando LAME (`de.sciss.jump3r.mp3.Lame`).
+ * 7. Escritura y lectura binaria de etiquetas **ID3v2.3** (`TIT2`, `TPE1`, `TALB`, `TYER`, `TCON` + carátula `APIC`)
+ *    para `MP3` y átomos de metadatos para `M4A`.
  */
 object PcmWavMp3AudioHelper {
 
@@ -108,7 +117,6 @@ object PcmWavMp3AudioHelper {
                         if (sampleSize < 0) break
 
                         val frameLength = sampleSize + 7
-                        // Perfil AAC LC = 2 (índice ADTS = profile - 1 = 1)
                         val profile = 1
                         adtsHeader[0] = 0xFF.toByte()
                         adtsHeader[1] = 0xF9.toByte()
@@ -150,7 +158,6 @@ object PcmWavMp3AudioHelper {
         tempPcmOutputFile: File,
         onProgress: (Float) -> Unit
     ): DecodedPcmInfo {
-        // Si el archivo de entrada ya es un WAV PCM 16-bit LE sin compresión, podemos extraer su PCM directo
         parseDirectWavPcm16IfApplicable(inputFile, tempPcmOutputFile, onProgress)?.let {
             return it
         }
@@ -298,10 +305,6 @@ object PcmWavMp3AudioHelper {
         }
     }
 
-    /**
-     * Si el archivo de entrada ya es un archivo RIFF WAVE PCM 16-bit sin comprimir,
-     * extrae sus muestras PCM directamente de forma ultrarrápida.
-     */
     private fun parseDirectWavPcm16IfApplicable(
         inputFile: File,
         tempPcmOutputFile: File,
@@ -326,7 +329,6 @@ object PcmWavMp3AudioHelper {
                     return null
                 }
 
-                // Buscar el subchunk "data"
                 var offset = 12L
                 var dataOffset = 44L
                 var dataSize = inputFile.length() - 44L
@@ -399,8 +401,8 @@ object PcmWavMp3AudioHelper {
         header.putInt(totalFileSizeMinus8)
         header.put("WAVE".toByteArray(Charsets.US_ASCII))
         header.put("fmt ".toByteArray(Charsets.US_ASCII))
-        header.putInt(16) // Tamaño subchunk PCM
-        header.putShort(1) // AudioFormat = 1 (PCM lineal)
+        header.putInt(16)
+        header.putShort(1)
         header.putShort(channels.toShort())
         header.putInt(sampleRate)
         header.putInt(byteRate)
@@ -421,7 +423,124 @@ object PcmWavMp3AudioHelper {
     }
 
     /**
-     * Aplica una envolvente suave de entrada (Fade In) y salida (Fade Out) sobre muestras PCM 16-bit LE (v0.3).
+     * Normalización automática de volumen (`Auto-Gain` a `-1.0 dBFS` por defecto - v0.4).
+     * Escanea el pico máximo absoluto en streaming y escala todas las muestras PCM 16-bit LE
+     * para alcanzar exactamente `targetDbFs` (`-1.0 dBFS` ≈ amplitud `29204` de `32767`).
+     */
+    @Throws(IOException::class)
+    fun normalizePcm16LeToTargetDbFs(
+        pcmInfo: DecodedPcmInfo,
+        targetDbFs: Double = -1.0,
+        outputPcmFile: File
+    ): DecodedPcmInfo {
+        val maxPeak = computePeakAmplitudePcm16Le(pcmInfo.pcmFile)
+        if (maxPeak <= 0) {
+            pcmInfo.pcmFile.copyTo(outputPcmFile, overwrite = true)
+            return pcmInfo.copy(pcmFile = outputPcmFile)
+        }
+
+        val targetPeak = (32767.0 * 10.0.pow(targetDbFs.coerceIn(-24.0, 0.0) / 20.0))
+            .roundToInt()
+            .coerceIn(1, 32767)
+        val gain = (targetPeak.toDouble() / maxPeak.toDouble()).coerceIn(0.05, 16.0)
+
+        FileInputStream(pcmInfo.pcmFile).use { fis ->
+            FileOutputStream(outputPcmFile).use { fos ->
+                BufferedOutputStream(fos, 64 * 1024).use { bos ->
+                    val buf = ByteArray(16 * 1024)
+                    while (true) {
+                        val read = readFullFrames(fis, buf, 2)
+                        if (read <= 0) break
+                        var i = 0
+                        while (i + 1 < read) {
+                            val lo = buf[i].toInt() and 0xFF
+                            val hi = buf[i + 1].toInt() // sign-extended
+                            val sample = (hi shl 8) or lo
+                            val scaled = (sample * gain).roundToInt()
+                                .coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt())
+                            buf[i] = (scaled and 0xFF).toByte()
+                            buf[i + 1] = ((scaled shr 8) and 0xFF).toByte()
+                            i += 2
+                        }
+                        bos.write(buf, 0, read)
+                    }
+                    bos.flush()
+                }
+            }
+        }
+        return pcmInfo.copy(pcmFile = outputPcmFile)
+    }
+
+    /**
+     * Calcula el pico máximo absoluto (`0..32767`) de un archivo de muestras PCM 16-bit LE.
+     */
+    fun computePeakAmplitudePcm16Le(pcmFile: File): Int {
+        var maxPeak = 0
+        FileInputStream(pcmFile).use { fis ->
+            val buf = ByteArray(16 * 1024)
+            while (true) {
+                val read = readFullFrames(fis, buf, 2)
+                if (read <= 0) break
+                var i = 0
+                while (i + 1 < read) {
+                    val lo = buf[i].toInt() and 0xFF
+                    val hi = buf[i + 1].toInt()
+                    val sample = (hi shl 8) or lo
+                    val absVal = if (sample == Short.MIN_VALUE.toInt()) 32767 else abs(sample)
+                    if (absVal > maxPeak) {
+                        maxPeak = absVal
+                    }
+                    i += 2
+                }
+            }
+        }
+        return maxPeak
+    }
+
+    /**
+     * Extrae `bucketCount` picos normalizados (`0.06f..1.0f`) de un archivo PCM 16-bit LE
+     * para dibujar la forma de onda interactiva en `MediaTimelineTrimmerDialog` (v0.4).
+     */
+    fun extractWaveformPeaksFromPcmFile(pcmFile: File, bucketCount: Int = 72): List<Float> {
+        val count = bucketCount.coerceIn(16, 240)
+        val totalLen = pcmFile.length()
+        if (totalLen < 4L) return List(count) { 0.25f }
+
+        val peaks = IntArray(count)
+        var globalMax = 1
+        val bytesPerBucket = (totalLen / count).coerceAtLeast(2L)
+
+        RandomAccessFile(pcmFile, "r").use { raf ->
+            val sampleBuf = ByteArray(4096)
+            for (b in 0 until count) {
+                val startOffset = (b * bytesPerBucket) and -2L // alinear a 2 bytes
+                if (startOffset >= totalLen) break
+                raf.seek(startOffset)
+                val toRead = minOf(sampleBuf.size.toLong(), bytesPerBucket, totalLen - startOffset).toInt() and -2
+                if (toRead <= 0) continue
+                val read = raf.read(sampleBuf, 0, toRead)
+                var bucketPeak = 0
+                var i = 0
+                while (i + 1 < read) {
+                    val lo = sampleBuf[i].toInt() and 0xFF
+                    val hi = sampleBuf[i + 1].toInt()
+                    val sample = (hi shl 8) or lo
+                    val absVal = if (sample == Short.MIN_VALUE.toInt()) 32767 else abs(sample)
+                    if (absVal > bucketPeak) bucketPeak = absVal
+                    i += 2
+                }
+                peaks[b] = bucketPeak
+                if (bucketPeak > globalMax) globalMax = bucketPeak
+            }
+        }
+
+        return peaks.map { p ->
+            (p.toFloat() / globalMax.toFloat()).coerceIn(0.06f, 1.0f)
+        }
+    }
+
+    /**
+     * Aplica una envolvente suave de entrada (Fade In) y salida (Fade Out) sobre muestras PCM 16-bit LE.
      */
     @Throws(IOException::class)
     fun applyFadeInOutToPcm16Le(
@@ -485,8 +604,7 @@ object PcmWavMp3AudioHelper {
     }
 
     /**
-     * Codifica muestras PCM 16-bit Little-Endian a un archivo `.mp3` real usando los módulos internos
-     * de `de.sciss.jump3r.mp3.Lame` (LAME 3.98.4 en Java puro, compatible al 100% con Android Runtime).
+     * Codifica muestras PCM 16-bit Little-Endian a un archivo `.mp3` real usando LAME 3.98.4 (`de.sciss.jump3r.mp3.Lame`).
      */
     @Throws(IOException::class)
     fun encodePcm16LeToMp3(
@@ -513,7 +631,6 @@ object PcmWavMp3AudioHelper {
         val intf = Interface()
         val common = Common()
 
-        // Enlazar todos los submódulos internos del motor LAME exactamente como lo requiere jump3r
         lame.setModules(ga, bs, presets, qupvt, qu, vbr, ver, id3, mpg)
         bs.setModules(ga, mpg, ver, vbr)
         id3.setModules(bs, ver)
@@ -556,7 +673,7 @@ object PcmWavMp3AudioHelper {
         }
 
         val framesPerChunk = 1152 * 4
-        val bytesPerSample = 2 // 16-bit PCM
+        val bytesPerSample = 2
         val bytesPerFrame = bytesPerSample * channels
         val pcmChunkBuffer = ByteArray(framesPerChunk * bytesPerFrame)
         val leftChannel = IntArray(framesPerChunk)
@@ -579,9 +696,8 @@ object PcmWavMp3AudioHelper {
                             if (channels == 2) {
                                 for (i in 0 until sampleFrames) {
                                     val loL = pcmChunkBuffer[byteIdx++].toInt() and 0xFF
-                                    val hiL = pcmChunkBuffer[byteIdx++].toInt() // sign-extended
+                                    val hiL = pcmChunkBuffer[byteIdx++].toInt()
                                     val sampleL = (hiL shl 8) or loL
-                                    // Escalar muestra de 16-bit a 32-bit con signo como espera lame_encode_buffer_int
                                     leftChannel[i] = sampleL shl 16
 
                                     val loR = pcmChunkBuffer[byteIdx++].toInt() and 0xFF
@@ -636,6 +752,228 @@ object PcmWavMp3AudioHelper {
         }
     }
 
+    // =========================================================================================
+    // Editor Binario de Etiquetas ID3v2.3 + Carátula (APIC) para MP3 y Átomos para M4A (v0.4)
+    // =========================================================================================
+
+    /**
+     * Construye el bloque binario completo ID3v2.3 (`ID3\x03\x00\x00` + frames `TIT2`, `TPE1`,
+     * `TALB`, `TYER`, `TCON` en UTF-16 con BOM y frame `APIC` para la carátula).
+     */
+    fun buildId3v23TagBytes(
+        metadata: AudioMetadataSpec,
+        coverArtBytes: ByteArray? = null,
+        coverMimeType: String = "image/jpeg"
+    ): ByteArray {
+        val framesOut = ByteArrayOutputStream()
+
+        fun writeTextFrame(frameId: String, value: String) {
+            val clean = value.trim()
+            if (clean.isEmpty() || frameId.length != 4) return
+            val utf16LeBytes = clean.toByteArray(Charsets.UTF_16LE)
+            val payload = ByteArray(1 + 2 + utf16LeBytes.size)
+            payload[0] = 0x01 // UTF-16 con BOM
+            payload[1] = 0xFF.toByte()
+            payload[2] = 0xFE.toByte()
+            System.arraycopy(utf16LeBytes, 0, payload, 3, utf16LeBytes.size)
+
+            framesOut.write(frameId.toByteArray(Charsets.US_ASCII))
+            framesOut.write(ByteBuffer.allocate(4).order(ByteOrder.BIG_ENDIAN).putInt(payload.size).array())
+            framesOut.write(byteArrayOf(0x00, 0x00)) // Frame flags
+            framesOut.write(payload)
+        }
+
+        writeTextFrame("TIT2", metadata.title)
+        writeTextFrame("TPE1", metadata.artist)
+        writeTextFrame("TALB", metadata.album)
+        writeTextFrame("TYER", metadata.year)
+        writeTextFrame("TCON", metadata.genre)
+
+        if (coverArtBytes != null && coverArtBytes.isNotEmpty()) {
+            val mimeAscii = coverMimeType.ifBlank { "image/jpeg" }.toByteArray(Charsets.ISO_8859_1)
+            val apicPayload = ByteArrayOutputStream().apply {
+                write(0x00) // Text encoding ISO-8859-1
+                write(mimeAscii)
+                write(0x00) // Null terminator de MIME
+                write(0x03) // Picture type: 0x03 = Cover (front)
+                write(0x00) // Descripción vacía terminada en null
+                write(coverArtBytes)
+            }.toByteArray()
+
+            framesOut.write("APIC".toByteArray(Charsets.US_ASCII))
+            framesOut.write(ByteBuffer.allocate(4).order(ByteOrder.BIG_ENDIAN).putInt(apicPayload.size).array())
+            framesOut.write(byteArrayOf(0x00, 0x00))
+            framesOut.write(apicPayload)
+        }
+
+        val allFrames = framesOut.toByteArray()
+        if (allFrames.isEmpty()) return ByteArray(0)
+
+        val header = ByteArray(10)
+        header[0] = 'I'.code.toByte()
+        header[1] = 'D'.code.toByte()
+        header[2] = '3'.code.toByte()
+        header[3] = 0x03 // ID3v2.3
+        header[4] = 0x00 // Revision 0
+        header[5] = 0x00 // Flags
+        // Synchsafe 28-bit integer
+        val size = allFrames.size
+        header[6] = ((size shr 21) and 0x7F).toByte()
+        header[7] = ((size shr 14) and 0x7F).toByte()
+        header[8] = ((size shr 7) and 0x7F).toByte()
+        header[9] = (size and 0x7F).toByte()
+
+        val tagOut = ByteArrayOutputStream(10 + allFrames.size)
+        tagOut.write(header)
+        tagOut.write(allFrames)
+        return tagOut.toByteArray()
+    }
+
+    /**
+     * Inyecta o reemplaza la cabecera ID3v2.3 y carátula `APIC` al inicio de un archivo `.mp3`.
+     */
+    @Throws(IOException::class)
+    fun writeId3v23TagsToMp3File(
+        mp3File: File,
+        metadata: AudioMetadataSpec,
+        coverArtBytes: ByteArray? = null,
+        coverMimeType: String = "image/jpeg"
+    ) {
+        val tagBytes = buildId3v23TagBytes(metadata, coverArtBytes, coverMimeType)
+        if (tagBytes.isEmpty() || !mp3File.exists()) return
+
+        val tempTagged = File(mp3File.parentFile, "${mp3File.name}.id3tmp")
+        try {
+            FileInputStream(mp3File).use { fis ->
+                val head = ByteArray(10)
+                val r = fis.read(head)
+                val skipExistingTagBytes = if (r == 10 &&
+                    head[0] == 'I'.code.toByte() &&
+                    head[1] == 'D'.code.toByte() &&
+                    head[2] == '3'.code.toByte()
+                ) {
+                    val existingSize = ((head[6].toInt() and 0x7F) shl 21) or
+                        ((head[7].toInt() and 0x7F) shl 14) or
+                        ((head[8].toInt() and 0x7F) shl 7) or
+                        (head[9].toInt() and 0x7F)
+                    existingSize.toLong()
+                } else {
+                    -1L
+                }
+
+                FileOutputStream(tempTagged).use { fos ->
+                    BufferedOutputStream(fos, 64 * 1024).use { bos ->
+                        bos.write(tagBytes)
+                        if (skipExistingTagBytes >= 0L) {
+                            var toSkip = skipExistingTagBytes
+                            while (toSkip > 0L) {
+                                val skipped = fis.skip(toSkip)
+                                if (skipped <= 0L) break
+                                toSkip -= skipped
+                            }
+                        } else if (r > 0) {
+                            bos.write(head, 0, r)
+                        }
+                        fis.copyTo(bos, 64 * 1024)
+                        bos.flush()
+                    }
+                }
+            }
+            tempTagged.copyTo(mp3File, overwrite = true)
+        } finally {
+            tempTagged.delete()
+        }
+    }
+
+    /**
+     * Lee y decodifica los frames ID3v2.3 (`TIT2`, `TPE1`, `TALB`, `TYER`, `TCON`, `APIC_SIZE`)
+     * de un archivo/array `.mp3`.
+     */
+    fun parseId3v23TagsFromBytes(mp3Bytes: ByteArray): Map<String, String> {
+        if (mp3Bytes.size < 10) return emptyMap()
+        if (mp3Bytes[0] != 'I'.code.toByte() ||
+            mp3Bytes[1] != 'D'.code.toByte() ||
+            mp3Bytes[2] != '3'.code.toByte()
+        ) {
+            return emptyMap()
+        }
+
+        val tagSize = ((mp3Bytes[6].toInt() and 0x7F) shl 21) or
+            ((mp3Bytes[7].toInt() and 0x7F) shl 14) or
+            ((mp3Bytes[8].toInt() and 0x7F) shl 7) or
+            (mp3Bytes[9].toInt() and 0x7F)
+
+        val endPos = minOf(10 + tagSize, mp3Bytes.size)
+        var pos = 10
+        val result = linkedMapOf<String, String>()
+
+        while (pos + 10 <= endPos) {
+            val frameId = String(mp3Bytes, pos, 4, Charsets.US_ASCII)
+            if (frameId.any { it.code !in 0x30..0x5A }) break
+            val frameSize = ByteBuffer.wrap(mp3Bytes, pos + 4, 4).order(ByteOrder.BIG_ENDIAN).int
+            pos += 10
+            if (frameSize <= 0 || pos + frameSize > endPos) break
+
+            if (frameId == "APIC") {
+                result["APIC_BYTES"] = frameSize.toString()
+            } else if (frameId.startsWith("T")) {
+                val enc = mp3Bytes[pos].toInt() and 0xFF
+                val textBytes = mp3Bytes.copyOfRange(pos + 1, pos + frameSize)
+                val decoded = when (enc) {
+                    1 -> {
+                        if (textBytes.size >= 2 &&
+                            textBytes[0] == 0xFF.toByte() &&
+                            textBytes[1] == 0xFE.toByte()
+                        ) {
+                            String(textBytes, 2, textBytes.size - 2, Charsets.UTF_16LE)
+                        } else if (textBytes.size >= 2 &&
+                            textBytes[0] == 0xFE.toByte() &&
+                            textBytes[1] == 0xFF.toByte()
+                        ) {
+                            String(textBytes, 2, textBytes.size - 2, Charsets.UTF_16BE)
+                        } else {
+                            String(textBytes, Charsets.UTF_16)
+                        }
+                    }
+                    3 -> String(textBytes, Charsets.UTF_8)
+                    else -> String(textBytes, Charsets.ISO_8859_1)
+                }.trimEnd('\u0000')
+                result[frameId] = decoded
+            }
+            pos += frameSize
+        }
+
+        return result
+    }
+
+    /**
+     * Escribe un átomo de metadatos ISO-BMFF (`udta` / `ID32`) al final de un contenedor `.m4a`
+     * para almacenar título, artista, álbum, año, género y carátula.
+     */
+    @Throws(IOException::class)
+    fun writeMetadataAtomsToM4aFile(
+        m4aFile: File,
+        metadata: AudioMetadataSpec,
+        coverArtBytes: ByteArray? = null
+    ) {
+        if (metadata.isEmpty && (coverArtBytes == null || coverArtBytes.isEmpty())) return
+        val id3Payload = buildId3v23TagBytes(metadata, coverArtBytes, "image/jpeg")
+        if (id3Payload.isEmpty() || !m4aFile.exists()) return
+
+        // Construir caja MP4 'udta' compatible que envuelve el bloque ID3v2.3
+        val boxSize = 8 + id3Payload.size
+        val boxHeader = ByteBuffer.allocate(8).order(ByteOrder.BIG_ENDIAN).apply {
+            putInt(boxSize)
+            put("udta".toByteArray(Charsets.US_ASCII))
+        }.array()
+
+        FileOutputStream(m4aFile, true).use { fos ->
+            fos.write(boxHeader)
+            fos.write(id3Payload)
+            fos.flush()
+        }
+    }
+
     private fun readFullFrames(fis: FileInputStream, buffer: ByteArray, frameSize: Int): Int {
         var total = 0
         while (total < buffer.size) {
@@ -662,7 +1000,7 @@ object PcmWavMp3AudioHelper {
             11025 -> 10
             8000 -> 11
             7350 -> 12
-            else -> 4 // 44100 Hz por defecto
+            else -> 4
         }
     }
 }

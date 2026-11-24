@@ -2,14 +2,34 @@
 <resources>
     <string name="app_name">AnyWall</string>
     <string name="app_subtitle">Universal Converter</string>
-    <string name="offline_badge">100% Offline • Private</string>
     <string name="notification_channel_name">AnyWall Conversions</string>
-    <string name="notification_channel_desc">Background progress for local media and document conversions</string>
+    <string name="notification_channel_desc">Background progress for media and document conversions</string>
     <string name="shortcut_convert_short">Convert</string>
-    <string name="shortcut_convert_long">New offline conversion</string>
-    <string name="shortcut_tools_short">Offline Tools</string>
-    <string name="shortcut_tools_long">QR, AES Vault, Metadata &amp; Diff</string>
+    <string name="shortcut_convert_long">New conversion</string>
+    <string name="shortcut_tools_short">Tools</string>
+    <string name="shortcut_tools_long">QR, AES Vault, Metadata, Duplicates &amp; Diff</string>
     <string name="shortcut_history_short">History</string>
     <string name="shortcut_history_long">View conversion history</string>
-    <string name="quick_tile_label">AnyWall Offline</string>
+    <string name="quick_tile_label">AnyWall</string>
+
+    <!-- v0.4: Estudios táctiles y herramientas -->
+    <string name="batch_renamer_title">Batch renamer</string>
+    <string name="btn_apply_trim">Apply trim</string>
+    <string name="btn_apply_visual_edits">Apply</string>
+    <string name="btn_cancel">Cancel</string>
+    <string name="btn_capture_exact_frame">Capture exact frame</string>
+    <string name="btn_hold_to_compare">Hold to compare</string>
+    <string name="btn_redo">Redo</string>
+    <string name="btn_reset_edits">Reset</string>
+    <string name="btn_undo">Undo</string>
+    <string name="media_trimmer_title">Timeline &amp; trim</string>
+    <string name="photo_studio_apply_all_batch">Apply to whole batch</string>
+    <string name="photo_studio_tab_adjust">Adjust</string>
+    <string name="photo_studio_tab_censor">Redact</string>
+    <string name="photo_studio_tab_crop">Crop</string>
+    <string name="photo_studio_tab_filters">Filters</string>
+    <string name="photo_studio_tab_scanner">Scanner</string>
+    <string name="photo_studio_tab_text">Text</string>
+    <string name="photo_studio_title">Photo Studio</string>
+    <string name="video_crop_title">Crop video frame</string>
 </resources>

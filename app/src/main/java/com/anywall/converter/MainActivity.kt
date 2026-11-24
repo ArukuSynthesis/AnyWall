@@ -58,13 +58,20 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             val themeMode by mainViewModel.themeMode.collectAsStateWithLifecycle()
+            val useDynamicColor by mainViewModel.useDynamicColor.collectAsStateWithLifecycle()
+            val accentPalette by mainViewModel.accentPalette.collectAsStateWithLifecycle()
             val darkTheme = when (themeMode) {
                 AppThemeMode.SYSTEM -> isSystemInDarkTheme()
                 AppThemeMode.LIGHT -> false
-                AppThemeMode.DARK -> true
+                AppThemeMode.DARK, AppThemeMode.AMOLED_BLACK -> true
             }
 
-            AnyWallTheme(darkTheme = darkTheme) {
+            AnyWallTheme(
+                themeMode = themeMode,
+                darkTheme = darkTheme,
+                dynamicColor = useDynamicColor,
+                accentPalette = accentPalette
+            ) {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background

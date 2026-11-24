@@ -2,14 +2,34 @@
 <resources>
     <string name="app_name">AnyWall</string>
     <string name="app_subtitle">Universal Converter</string>
-    <string name="offline_badge">100% Offline • Privado</string>
     <string name="notification_channel_name">Conversiones de AnyWall</string>
-    <string name="notification_channel_desc">Progreso en segundo plano de conversiones multimedia y documentales locales</string>
+    <string name="notification_channel_desc">Progreso en segundo plano de conversiones multimedia y documentales</string>
     <string name="shortcut_convert_short">Convertir</string>
-    <string name="shortcut_convert_long">Nueva conversión offline</string>
+    <string name="shortcut_convert_long">Nueva conversión</string>
     <string name="shortcut_tools_short">Herramientas</string>
-    <string name="shortcut_tools_long">QR, Bóveda AES, Metadatos y Diff</string>
+    <string name="shortcut_tools_long">QR, Bóveda AES, Metadatos, Duplicados y Diff</string>
     <string name="shortcut_history_short">Historial</string>
     <string name="shortcut_history_long">Ver historial de conversiones</string>
-    <string name="quick_tile_label">AnyWall Offline</string>
+    <string name="quick_tile_label">AnyWall</string>
+
+    <!-- v0.4: Estudios táctiles y herramientas -->
+    <string name="batch_renamer_title">Renombrador masivo</string>
+    <string name="btn_apply_trim">Aplicar recorte</string>
+    <string name="btn_apply_visual_edits">Aplicar</string>
+    <string name="btn_cancel">Cancelar</string>
+    <string name="btn_capture_exact_frame">Capturar fotograma exacto</string>
+    <string name="btn_hold_to_compare">Mantén pulsado para comparar</string>
+    <string name="btn_redo">Rehacer</string>
+    <string name="btn_reset_edits">Restablecer</string>
+    <string name="btn_undo">Deshacer</string>
+    <string name="media_trimmer_title">Línea de tiempo y recorte</string>
+    <string name="photo_studio_apply_all_batch">Aplicar a todo el lote</string>
+    <string name="photo_studio_tab_adjust">Ajustes</string>
+    <string name="photo_studio_tab_censor">Censura</string>
+    <string name="photo_studio_tab_crop">Recortar</string>
+    <string name="photo_studio_tab_filters">Filtros</string>
+    <string name="photo_studio_tab_scanner">Escáner</string>
+    <string name="photo_studio_tab_text">Texto</string>
+    <string name="photo_studio_title">Estudio de Fotos</string>
+    <string name="video_crop_title">Recortar encuadre de video</string>
 </resources>

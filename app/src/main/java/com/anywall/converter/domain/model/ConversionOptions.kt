@@ -4,7 +4,7 @@ import java.net.URLDecoder
 import java.net.URLEncoder
 
 /**
- * Parámetros configurables para cualquier lote de conversión en AnyWall (v0.3).
+ * Parámetros configurables para cualquier lote de conversión en AnyWall (v0.4).
  * Incluye serialización determinista pura en Kotlin (`serializeToString` / `deserializeFromString`)
  * para almacenamiento en Room v3 (`conversion_presets`), payloads de WorkManager y pruebas JUnit en JVM.
  */
@@ -21,14 +21,19 @@ data class ConversionOptions(
     val muteVideoAudio: Boolean = false,
     val trimStartSeconds: Long? = null,
     val trimEndSeconds: Long? = null,
+    val trimStartMillis: Long = 0L,
+    val trimEndMillis: Long = 0L,
     val videoPlaybackSpeedFactor: Float = 1.0f,
     val videoRotationDegrees: Int = 0,
     val videoFlipHorizontal: Boolean = false,
     val targetVideoMaxSizeMb: Int? = null,
+    val videoCropSerialized: String = "",
     val mergeMediaSequence: Boolean = false,
     val audioBitrateKbps: Int = 192,
     val audioFadeInSeconds: Int = 0,
     val audioFadeOutSeconds: Int = 0,
+    val audioNormalizeAutoGain: Boolean = false,
+    val audioMetadataSerialized: String = "",
     val exportAsRingtone: Boolean = false,
     val customOutputBaseName: String = "",
     val mergeIntoSinglePdf: Boolean = true,
@@ -45,6 +50,7 @@ data class ConversionOptions(
     val pdfStampQrContent: String = "",
     val archiveCompressionLevel: ArchiveCompressionLevel = ArchiveCompressionLevel.BALANCED,
     val selectedArchiveEntriesSerialized: String = "",
+    val archivePassword: String = "",
     val fileSplitPartSizeMb: Int = 25,
     val preserveSubfolderStructure: Boolean = false,
     val prettyPrintStructuredData: Boolean = true,
@@ -63,11 +69,21 @@ data class ConversionOptions(
     val normalizedVideoRotationDegrees: Int
         get() = ((videoRotationDegrees % 360) + 360) % 360
 
+    val effectiveTrimStartMillis: Long
+        get() = if (trimStartMillis > 0L) trimStartMillis else ((trimStartSeconds ?: 0L).coerceAtLeast(0L) * 1000L)
+
+    val effectiveTrimEndMillis: Long?
+        get() = when {
+            trimEndMillis > effectiveTrimStartMillis -> trimEndMillis
+            trimEndSeconds != null && trimEndSeconds * 1000L > effectiveTrimStartMillis -> trimEndSeconds * 1000L
+            else -> null
+        }
+
     val hasValidTrimRange: Boolean
         get() {
-            val start = trimStartSeconds ?: 0L
-            val end = trimEndSeconds
-            return (start > 0L && (end == null || end > start)) || (end != null && end > start && end > 0L)
+            val startMs = effectiveTrimStartMillis
+            val endMs = effectiveTrimEndMillis
+            return (startMs > 0L && (endMs == null || endMs > startMs)) || (endMs != null && endMs > startMs && endMs > 0L)
         }
 
     val hasVisualPdfEdits: Boolean
@@ -78,6 +94,12 @@ data class ConversionOptions(
 
     val imageEditSpec: ImageEditSpec
         get() = ImageEditSpec.fromSerializedString(imageVisualEditSerialized)
+
+    val videoCropSpec: VideoCropSpec
+        get() = VideoCropSpec.deserialize(videoCropSerialized)
+
+    val audioMetadataSpec: AudioMetadataSpec
+        get() = AudioMetadataSpec.deserialize(audioMetadataSerialized)
 
     val selectedArchiveEntries: Set<String>
         get() {
@@ -103,14 +125,19 @@ data class ConversionOptions(
             "muteVideoAudio" to muteVideoAudio.toString(),
             "trimStartSeconds" to (trimStartSeconds?.toString() ?: ""),
             "trimEndSeconds" to (trimEndSeconds?.toString() ?: ""),
+            "trimStartMillis" to trimStartMillis.toString(),
+            "trimEndMillis" to trimEndMillis.toString(),
             "videoPlaybackSpeedFactor" to videoPlaybackSpeedFactor.toString(),
             "videoRotationDegrees" to videoRotationDegrees.toString(),
             "videoFlipHorizontal" to videoFlipHorizontal.toString(),
             "targetVideoMaxSizeMb" to (targetVideoMaxSizeMb?.toString() ?: ""),
+            "videoCropSerialized" to videoCropSerialized,
             "mergeMediaSequence" to mergeMediaSequence.toString(),
             "audioBitrateKbps" to audioBitrateKbps.toString(),
             "audioFadeInSeconds" to audioFadeInSeconds.toString(),
             "audioFadeOutSeconds" to audioFadeOutSeconds.toString(),
+            "audioNormalizeAutoGain" to audioNormalizeAutoGain.toString(),
+            "audioMetadataSerialized" to audioMetadataSerialized,
             "exportAsRingtone" to exportAsRingtone.toString(),
             "customOutputBaseName" to customOutputBaseName,
             "mergeIntoSinglePdf" to mergeIntoSinglePdf.toString(),
@@ -127,6 +154,7 @@ data class ConversionOptions(
             "pdfStampQrContent" to pdfStampQrContent,
             "archiveCompressionLevel" to archiveCompressionLevel.name,
             "selectedArchiveEntriesSerialized" to selectedArchiveEntriesSerialized,
+            "archivePassword" to archivePassword,
             "fileSplitPartSizeMb" to fileSplitPartSizeMb.toString(),
             "preserveSubfolderStructure" to preserveSubfolderStructure.toString(),
             "prettyPrintStructuredData" to prettyPrintStructuredData.toString(),
@@ -165,14 +193,19 @@ data class ConversionOptions(
                 muteVideoAudio = map["muteVideoAudio"]?.toBooleanStrictOrNull() ?: false,
                 trimStartSeconds = map["trimStartSeconds"]?.toLongOrNull()?.takeIf { it >= 0L },
                 trimEndSeconds = map["trimEndSeconds"]?.toLongOrNull()?.takeIf { it > 0L },
+                trimStartMillis = map["trimStartMillis"]?.toLongOrNull()?.coerceAtLeast(0L) ?: 0L,
+                trimEndMillis = map["trimEndMillis"]?.toLongOrNull()?.coerceAtLeast(0L) ?: 0L,
                 videoPlaybackSpeedFactor = map["videoPlaybackSpeedFactor"]?.toFloatOrNull()?.coerceIn(0.25f, 4.0f) ?: 1.0f,
                 videoRotationDegrees = map["videoRotationDegrees"]?.toIntOrNull() ?: 0,
                 videoFlipHorizontal = map["videoFlipHorizontal"]?.toBooleanStrictOrNull() ?: false,
                 targetVideoMaxSizeMb = map["targetVideoMaxSizeMb"]?.toIntOrNull()?.takeIf { it > 0 },
+                videoCropSerialized = map["videoCropSerialized"].orEmpty(),
                 mergeMediaSequence = map["mergeMediaSequence"]?.toBooleanStrictOrNull() ?: false,
                 audioBitrateKbps = map["audioBitrateKbps"]?.toIntOrNull() ?: 192,
                 audioFadeInSeconds = map["audioFadeInSeconds"]?.toIntOrNull()?.coerceIn(0, 30) ?: 0,
                 audioFadeOutSeconds = map["audioFadeOutSeconds"]?.toIntOrNull()?.coerceIn(0, 30) ?: 0,
+                audioNormalizeAutoGain = map["audioNormalizeAutoGain"]?.toBooleanStrictOrNull() ?: false,
+                audioMetadataSerialized = map["audioMetadataSerialized"].orEmpty(),
                 exportAsRingtone = map["exportAsRingtone"]?.toBooleanStrictOrNull() ?: false,
                 customOutputBaseName = map["customOutputBaseName"].orEmpty(),
                 mergeIntoSinglePdf = map["mergeIntoSinglePdf"]?.toBooleanStrictOrNull() ?: true,
@@ -189,6 +222,7 @@ data class ConversionOptions(
                 pdfStampQrContent = map["pdfStampQrContent"].orEmpty(),
                 archiveCompressionLevel = ArchiveCompressionLevel.fromNameOrDefault(map["archiveCompressionLevel"]),
                 selectedArchiveEntriesSerialized = map["selectedArchiveEntriesSerialized"].orEmpty(),
+                archivePassword = map["archivePassword"].orEmpty(),
                 fileSplitPartSizeMb = map["fileSplitPartSizeMb"]?.toIntOrNull()?.coerceAtLeast(1) ?: 25,
                 preserveSubfolderStructure = map["preserveSubfolderStructure"]?.toBooleanStrictOrNull() ?: false,
                 prettyPrintStructuredData = map["prettyPrintStructuredData"]?.toBooleanStrictOrNull() ?: true,

@@ -8,12 +8,13 @@ import kotlinx.coroutines.flow.asStateFlow
 import java.util.Locale
 
 /**
- * Modos de tema visual soportados localmente en AnyWall (v0.3).
+ * Modos de tema visual soportados en AnyWall (v0.4), incluyendo Negro Puro AMOLED (#000000).
  */
 enum class AppThemeMode(val labelEs: String, val labelEn: String) {
     SYSTEM("Sistema", "System"),
     LIGHT("Claro", "Light"),
-    DARK("Oscuro", "Dark");
+    DARK("Oscuro", "Dark"),
+    AMOLED_BLACK("AMOLED (#000000)", "AMOLED (#000000)");
 
     fun localizedLabel(isEnglish: Boolean): String = if (isEnglish) labelEn else labelEs
 
@@ -26,7 +27,32 @@ enum class AppThemeMode(val labelEs: String, val labelEn: String) {
 }
 
 /**
- * Idioma de la interfaz configurable localmente en AnyWall (v0.3).
+ * Paleta de color de acento personalizable en AnyWall (v0.4).
+ */
+enum class AppAccentPalette(
+    val labelEs: String,
+    val labelEn: String,
+    val previewColorHex: Long
+) {
+    INDIGO_STUDIO("Indigo Studio", "Indigo Studio", 0xFF6366F1),
+    EMERALD("Esmeralda", "Emerald", 0xFF10B981),
+    AMBER("Ámbar", "Amber", 0xFFF59E0B),
+    ROSE("Rosa", "Rose", 0xFFF43F5E),
+    CYAN("Cian", "Cyan", 0xFF06B6D4),
+    MONOCHROME("Monocromo", "Monochrome", 0xFF94A3B8);
+
+    fun localizedLabel(isEnglish: Boolean): String = if (isEnglish) labelEn else labelEs
+
+    companion object {
+        fun fromNameOrDefault(name: String?): AppAccentPalette {
+            if (name.isNullOrBlank()) return INDIGO_STUDIO
+            return entries.firstOrNull { it.name.equals(name, ignoreCase = true) } ?: INDIGO_STUDIO
+        }
+    }
+}
+
+/**
+ * Idioma de la interfaz configurable en AnyWall (v0.4).
  */
 enum class AppLanguageMode(val labelEs: String, val labelEn: String) {
     SYSTEM("Sistema", "System"),
@@ -50,7 +76,7 @@ enum class AppLanguageMode(val labelEs: String, val labelEn: String) {
 }
 
 /**
- * Estrategia de organización de subcarpetas dentro de `Downloads/AnyWall/` (v0.3).
+ * Estrategia de organización de subcarpetas dentro de `Downloads/AnyWall/` (v0.4).
  */
 enum class OutputSubfolderMode(val labelEs: String, val labelEn: String) {
     FLAT("Raíz (Downloads/AnyWall)", "Flat (Downloads/AnyWall)"),
@@ -69,7 +95,7 @@ enum class OutputSubfolderMode(val labelEs: String, val labelEn: String) {
 }
 
 /**
- * Preferencias locales 100% offline de AnyWall almacenadas en `SharedPreferences` (v0.3).
+ * Preferencias de usuario de AnyWall almacenadas en `SharedPreferences` (v0.4).
  */
 class AppPreferences(context: Context) {
 
@@ -80,6 +106,18 @@ class AppPreferences(context: Context) {
         AppThemeMode.fromNameOrDefault(prefs.getString(KEY_THEME_MODE, AppThemeMode.SYSTEM.name))
     )
     val themeMode: StateFlow<AppThemeMode> = _themeMode.asStateFlow()
+
+    private val _useDynamicColor = MutableStateFlow(
+        prefs.getBoolean(KEY_USE_DYNAMIC_COLOR, false)
+    )
+    val useDynamicColor: StateFlow<Boolean> = _useDynamicColor.asStateFlow()
+
+    private val _accentPalette = MutableStateFlow(
+        AppAccentPalette.fromNameOrDefault(
+            prefs.getString(KEY_ACCENT_PALETTE, AppAccentPalette.INDIGO_STUDIO.name)
+        )
+    )
+    val accentPalette: StateFlow<AppAccentPalette> = _accentPalette.asStateFlow()
 
     private val _languageMode = MutableStateFlow(
         AppLanguageMode.fromNameOrDefault(prefs.getString(KEY_LANGUAGE_MODE, AppLanguageMode.ES.name))
@@ -128,6 +166,16 @@ class AppPreferences(context: Context) {
         _themeMode.value = mode
     }
 
+    fun setUseDynamicColor(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_USE_DYNAMIC_COLOR, enabled).apply()
+        _useDynamicColor.value = enabled
+    }
+
+    fun setAccentPalette(palette: AppAccentPalette) {
+        prefs.edit().putString(KEY_ACCENT_PALETTE, palette.name).apply()
+        _accentPalette.value = palette
+    }
+
     fun setLanguageMode(mode: AppLanguageMode) {
         prefs.edit().putString(KEY_LANGUAGE_MODE, mode.name).apply()
         _languageMode.value = mode
@@ -173,6 +221,8 @@ class AppPreferences(context: Context) {
     companion object {
         private const val PREFS_NAME = "anywall_local_prefs"
         private const val KEY_THEME_MODE = "theme_mode"
+        private const val KEY_USE_DYNAMIC_COLOR = "use_dynamic_color"
+        private const val KEY_ACCENT_PALETTE = "accent_palette"
         private const val KEY_LANGUAGE_MODE = "language_mode"
         private const val KEY_OUTPUT_SUBFOLDER_MODE = "output_subfolder_mode"
         private const val KEY_CUSTOM_SUBFOLDER_NAME = "custom_subfolder_name"

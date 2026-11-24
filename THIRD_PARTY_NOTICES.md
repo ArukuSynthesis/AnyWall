@@ -11,7 +11,7 @@
 
 ## 2. Repositorios y Librerías de Código Abierto Utilizados
 
-**AnyWall: Universal Converter** utiliza las siguientes bibliotecas de código abierto verificadas desde Google Maven y Maven Central para ejecutar todo el procesamiento multimedia y documental de forma 100% local:
+**AnyWall: Universal Converter** utiliza las siguientes bibliotecas de código abierto verificadas desde Google Maven y Maven Central, más una biblioteca nativa C (`libarchive`) incluida como código fuente y compilada con Android NDK:
 
 | Componente | Artefacto Maven | Autor / Titular | Licencia SPDX | Repositorio Oficial |
 | :--- | :--- | :--- | :--- | :--- |
@@ -24,6 +24,7 @@
 | **XZ for Java** | `org.tukaani:xz:1.9` | Lasse Collin / Tukaani Project | `0BSD` (Dominio Público) | https://github.com/tukaani-project/xz-java |
 | **jump3r (Java LAME MP3)** | `de.sciss:jump3r:1.0.5` | Hanns Holger Rutz (`Sciss`) / Ken Händel / Proyecto LAME | `LGPL-2.1-or-later` | https://github.com/Sciss/jump3r |
 | **ZXing Core (QR Engine)** | `com.google.zxing:core:3.5.3` | ZXing Authors & Contributors | `Apache-2.0` | https://github.com/zxing/zxing |
+| **libarchive (lector nativo NDK)** | `libarchive v3.7.7` (fuentes en `app/src/main/cpp/libarchive`, CMake 3.22.1 / NDK 27.0.12077973) | Tim Kientzle, Martin Matuska & libarchive Contributors | `BSD-2-Clause` | https://github.com/libarchive/libarchive |
 | **Kotlin & Coroutines** | `org.jetbrains.kotlin:2.0.21`, `kotlinx-coroutines-android:1.9.0` | JetBrains s.r.o. | `Apache-2.0` | https://github.com/JetBrains/kotlin |
 
 ---
@@ -54,6 +55,11 @@
 8. **ZXing Core (`Apache-2.0`):**
    - Desarrollado por los autores del proyecto ZXing ("Zebra Crossing") para la codificación y lectura local de códigos QR.
    - Código fuente y licencia en https://github.com/zxing/zxing.
-9. **Kotlin Standard Library & Coroutines (`Apache-2.0`):**
+9. **libarchive (`BSD-2-Clause`):**
+   - Copyright (c) 2003-2024 Tim Kientzle, Martin Matuska y los colaboradores de libarchive. Se incluye un subconjunto de sus fuentes C de **solo lectura** (lectores de formato `RAR` y `RAR5` y su infraestructura) en `app/src/main/cpp/libarchive/`, junto con el texto íntegro de la licencia en `app/src/main/cpp/libarchive/COPYING`.
+   - Se compila con Android NDK `27.0.12077973` mediante CMake `3.22.1` y se expone a Kotlin a través de `anywall_rar_jni.cpp` / `LibArchiveRarBridge.kt`, **exclusivamente para explorar y extraer** archivos `.rar`, `.rar5` y `.cbr` (incluidos contraseñas y volúmenes `.partN.rar`). AnyWall **nunca crea** archivos `.rar` ni `.cbr`.
+   - No se utiliza código del proyecto `UnRAR` de RARLAB; por ello la licencia del proyecto permanece `AGPL-3.0-only` sin excepciones adicionales.
+   - Código fuente y licencia en https://github.com/libarchive/libarchive.
+10. **Kotlin Standard Library & Coroutines (`Apache-2.0`):**
    - Desarrollados por JetBrains s.r.o.
    - Código fuente y licencia en https://github.com/JetBrains/kotlin y https://github.com/Kotlin/kotlinx.coroutines.

@@ -30,6 +30,15 @@ data class InputFileItem(
             }.ifBlank { "archivo" }
         }
 
+    val name: String
+        get() = displayName
+
+    val detectedFormat: SupportedFormat
+        get() = format
+
+    val nameWithoutExtension: String
+        get() = baseNameWithoutExtension
+
     val formattedSize: String
         get() = formatBytes(sizeBytes)
 

@@ -32,6 +32,8 @@ fun AnyWallNavHost(
     val selectedCategory by viewModel.selectedHistoryCategory.collectAsStateWithLifecycle()
     val searchQuery by viewModel.historySearchQuery.collectAsStateWithLifecycle()
     val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
+    val useDynamicColor by viewModel.useDynamicColor.collectAsStateWithLifecycle()
+    val accentPalette by viewModel.accentPalette.collectAsStateWithLifecycle()
     val languageMode by viewModel.languageMode.collectAsStateWithLifecycle()
     val outputSubfolderMode by viewModel.outputSubfolderMode.collectAsStateWithLifecycle()
     val customSubfolderName by viewModel.customSubfolderName.collectAsStateWithLifecycle()
@@ -75,6 +77,8 @@ fun AnyWallNavHost(
                 storageManager = viewModel.scopedStorageManager,
                 forensicHelper = viewModel.forensicMetadataHelper,
                 themeMode = themeMode,
+                useDynamicColor = useDynamicColor,
+                accentPalette = accentPalette,
                 languageMode = languageMode,
                 outputSubfolderMode = outputSubfolderMode,
                 customSubfolderName = customSubfolderName,
@@ -85,6 +89,8 @@ fun AnyWallNavHost(
                 tempCacheSizeBytes = tempCacheSizeBytes,
                 initialOpenToolsDialog = (initialQuickAction == AnyWallQuickTileService.ACTION_OPEN_TOOLS),
                 onSelectThemeMode = viewModel::setThemeMode,
+                onToggleDynamicColor = viewModel::setUseDynamicColor,
+                onSelectAccentPalette = viewModel::setAccentPalette,
                 onSelectLanguageMode = viewModel::setLanguageMode,
                 onSelectOutputSubfolderMode = viewModel::setOutputSubfolderMode,
                 onUpdateCustomSubfolderName = viewModel::setCustomSubfolderName,
@@ -123,7 +129,8 @@ fun AnyWallNavHost(
                 onCancelActiveJob = viewModel::cancelActiveConversion,
                 onDeleteHistoryRecord = { record ->
                     viewModel.deleteHistoryRecord(record, deletePhysicalFile = true)
-                }
+                },
+                onDeduplicateQueue = viewModel::replaceInputFilesList
             )
         }
 
@@ -153,6 +160,10 @@ fun AnyWallNavHost(
                 },
                 onMoveFileUp = viewModel::moveInputFileUp,
                 onMoveFileDown = viewModel::moveInputFileDown,
+                onMoveFile = viewModel::moveInputFile,
+                onReplaceInputFilesList = viewModel::replaceInputFilesList,
+                onDeduplicateQueue = viewModel::deduplicateCurrentInputFiles,
+                onDismissSmartShareSheet = viewModel::dismissSmartShareSheet,
                 onSortByName = viewModel::sortInputFilesByName,
                 onSortBySize = viewModel::sortInputFilesBySize,
                 onReverseOrder = viewModel::reverseInputFilesOrder,
@@ -176,6 +187,8 @@ fun AnyWallNavHost(
                 onUpdateMuteVideoAudio = viewModel::updateMuteVideoAudio,
                 onUpdateTrimStartText = viewModel::updateTrimStartText,
                 onUpdateTrimEndText = viewModel::updateTrimEndText,
+                onUpdateTrimRangeMillis = viewModel::updateTrimRangeMillis,
+                onUpdateVideoCropSpec = viewModel::updateVideoCropSpec,
                 onUpdateVideoPlaybackSpeed = viewModel::updateVideoPlaybackSpeed,
                 onUpdateVideoRotation = viewModel::updateVideoRotationDegrees,
                 onUpdateVideoFlipHorizontal = viewModel::updateVideoFlipHorizontal,
@@ -184,6 +197,8 @@ fun AnyWallNavHost(
                 onUpdateAudioBitrateKbps = viewModel::updateAudioBitrateKbps,
                 onUpdateAudioFadeSeconds = viewModel::updateAudioFadeSeconds,
                 onUpdateExportAsRingtone = viewModel::updateExportAsRingtone,
+                onUpdateAudioNormalizeAutoGain = viewModel::updateAudioNormalizeAutoGain,
+                onUpdateAudioMetadataSpec = viewModel::updateAudioMetadataSpec,
                 onUpdateCustomOutputName = viewModel::updateCustomOutputBaseName,
                 onUpdateMergeSinglePdf = viewModel::updateMergeIntoSinglePdf,
                 onUpdatePdfActionMode = viewModel::updatePdfActionMode,
@@ -198,6 +213,7 @@ fun AnyWallNavHost(
                 onUpdatePdfStampQrContent = viewModel::updatePdfStampQrContent,
                 onUpdateArchiveCompressionLevel = viewModel::updateArchiveCompressionLevel,
                 onUpdateSelectedArchiveEntries = viewModel::updateSelectedArchiveEntries,
+                onUpdateArchivePassword = viewModel::updateArchivePassword,
                 onUpdateFileSplitPartSizeMb = viewModel::updateFileSplitPartSizeMb,
                 onUpdatePreserveSubfolderStructure = viewModel::updatePreserveSubfolderStructure,
                 onUpdatePrettyPrintStructuredData = viewModel::updatePrettyPrintStructuredData,

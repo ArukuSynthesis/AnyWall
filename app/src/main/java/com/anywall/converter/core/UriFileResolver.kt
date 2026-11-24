@@ -147,6 +147,9 @@ class UriFileResolver(private val context: Context) {
     /**
      * Resuelve una URI a un `InputFileItem` listo para la cola de conversión.
      */
+    fun resolveMultipleFiles(uris: List<Uri>): List<InputFileItem> =
+        uris.mapNotNull { resolveInputFile(it) }
+
     fun resolveInputFile(uri: Uri, relativeFolderPath: String = ""): InputFileItem? {
         tryTakePersistableReadPermission(uri)
 
@@ -380,6 +383,10 @@ class UriFileResolver(private val context: Context) {
 
                 header[0] == 0x1F.toByte() && header[1] == 0x8B.toByte() -> SupportedFormat.GZ
 
+                header[0] == 0x52.toByte() && header[1] == 0x61.toByte() &&
+                    header[2] == 0x72.toByte() && header[3] == 0x21.toByte() &&
+                    read >= 7 && header[4] == 0x1A.toByte() && header[5] == 0x07.toByte() -> SupportedFormat.RAR
+
                 header[0] == 0x50.toByte() && header[1] == 0x4B.toByte() &&
                     header[2] == 0x03.toByte() && header[3] == 0x04.toByte() -> SupportedFormat.ZIP
 
@@ -416,6 +423,7 @@ class UriFileResolver(private val context: Context) {
                 .removeSuffix(".tar.xz")
                 .removeSuffix(".tar.bz2")
                 .removeSuffix(".anywall")
+                .replace(Regex("\\.part\\d+\\.rar$", RegexOption.IGNORE_CASE), "")
                 .let { name ->
                     if (name.contains('.')) name.substringBeforeLast('.') else name
                 }

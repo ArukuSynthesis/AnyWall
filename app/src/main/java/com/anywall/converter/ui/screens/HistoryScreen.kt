@@ -69,10 +69,10 @@ import com.anywall.converter.domain.model.InputFileItem
 import com.anywall.converter.ui.components.HistoryItemCard
 
 /**
- * `HistoryScreen` (v0.3):
- * - Tarjeta superior de **Estadísticas Locales de Ahorro**: total de archivos convertidos offline,
+ * `HistoryScreen` (v0.4):
+ * - Tarjeta superior de **Estadísticas de Ahorro**: total de archivos convertidos,
  *   volumen total procesado y espacio total ahorrado (`MB/GB`).
- * - Puerta de **Bloqueo Biométrico / Credencial del Dispositivo / PIN Local** opcional para privacidad.
+ * - Puerta de **Bloqueo Biométrico / Credencial del Dispositivo / PIN Local** opcional.
  * - Lista persistente conectada a Room con miniaturas locales, insignia de ahorro de peso,
  *   filtro por categoría, búsqueda y modo de **Selección Múltiple** (`ACTION_SEND_MULTIPLE`).
  */
@@ -393,7 +393,7 @@ fun HistoryScreen(
                                 Spacer(modifier = Modifier.width(10.dp))
                                 Column {
                                     Text(
-                                        text = "Estadísticas Offline: ${allRecordsForStats.size} conversiones",
+                                        text = "Estadísticas: ${allRecordsForStats.size} conversiones",
                                         style = MaterialTheme.typography.labelLarge,
                                         fontWeight = FontWeight.Bold
                                     )

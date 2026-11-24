@@ -35,6 +35,7 @@ import androidx.compose.material.icons.filled.FileOpen
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
@@ -65,6 +66,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.anywall.converter.core.AppAccentPalette
 import com.anywall.converter.core.AppLanguageMode
 import com.anywall.converter.core.AppThemeMode
 import com.anywall.converter.core.FileShareHelper
@@ -76,21 +78,22 @@ import com.anywall.converter.data.engines.ForensicMetadataHelper
 import com.anywall.converter.domain.model.ConversionPreset
 import com.anywall.converter.domain.model.FormatCategory
 import com.anywall.converter.domain.model.HistoryRecord
+import com.anywall.converter.domain.model.InputFileItem
 import com.anywall.converter.ui.components.AboutCreditsDialog
+import com.anywall.converter.ui.components.GitHubUpdaterDialog
 import com.anywall.converter.ui.components.AnyWallCreditsCatalog
 import com.anywall.converter.ui.components.CategoryQuickCard
 import com.anywall.converter.ui.components.ConversionProgressCard
 import com.anywall.converter.ui.components.HistoryItemCard
-import com.anywall.converter.ui.components.OfflinePrivacyBadge
 import com.anywall.converter.ui.components.OfflineToolsSheetDialog
 import com.anywall.converter.ui.components.SettingsDialog
 
 /**
- * `HomeScreen` (v0.3):
- * - Encabezado con el nombre **AnyWall** (`Universal Converter v0.3 • SynthesizerEnd`), soporte bilingüe (`ES`/`EN`).
+ * `HomeScreen` (v0.4):
+ * - Encabezado con el nombre **AnyWall** (`Universal Converter v0.4 • SynthesizerEnd`), soporte bilingüe (`ES`/`EN`).
  * - Selección de uno o múltiples archivos (`OpenMultipleDocuments`), importación de carpeta completa (`OpenDocumentTree`),
- *   captura rápida desde Cámara / Escáner (`TakePicture`) y acceso directo a la suite de **Herramientas Offline**
- *   (Inspector Forense & SHA-256, Códigos QR, Comparador Diff y Antes/Después).
+ *   captura rápida desde Cámara / Escáner (`TakePicture`) y acceso directo a la suite de **Herramientas**
+ *   (Inspector Forense & SHA-256, Duplicados SHA-256, Códigos QR, Comparador Diff y Antes/Después).
  * - Barra de **Presets / Perfiles Rápidos** (Room v3).
  * - Tarjetas de acceso rápido para las 5 categorías (`Imágenes`, `Documentos / PDF`, `Audio / Video`, `Comprimidos`, `Datos y Seguridad`).
  */
@@ -105,6 +108,8 @@ fun HomeScreen(
     storageManager: ScopedStorageManager,
     forensicHelper: ForensicMetadataHelper,
     themeMode: AppThemeMode,
+    useDynamicColor: Boolean = false,
+    accentPalette: AppAccentPalette = AppAccentPalette.INDIGO_STUDIO,
     languageMode: AppLanguageMode,
     outputSubfolderMode: OutputSubfolderMode,
     customSubfolderName: String,
@@ -115,6 +120,8 @@ fun HomeScreen(
     tempCacheSizeBytes: Long,
     initialOpenToolsDialog: Boolean = false,
     onSelectThemeMode: (AppThemeMode) -> Unit,
+    onToggleDynamicColor: (Boolean) -> Unit = {},
+    onSelectAccentPalette: (AppAccentPalette) -> Unit = {},
     onSelectLanguageMode: (AppLanguageMode) -> Unit,
     onSelectOutputSubfolderMode: (OutputSubfolderMode) -> Unit,
     onUpdateCustomSubfolderName: (String) -> Unit,
@@ -132,6 +139,7 @@ fun HomeScreen(
     onOpenHistory: () -> Unit,
     onCancelActiveJob: () -> Unit,
     onDeleteHistoryRecord: (HistoryRecord) -> Unit,
+    onDeduplicateQueue: ((List<InputFileItem>) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -139,7 +147,8 @@ fun HomeScreen(
 
     var showSettingsDialog by remember { mutableStateOf(false) }
     var showCreditsDialog by remember { mutableStateOf(false) }
-    var showOfflineToolsDialog by remember { mutableStateOf(initialOpenToolsDialog) }
+    var showGitHubUpdaterDialog by remember { mutableStateOf(false) }
+    var showToolsDialog by remember { mutableStateOf(initialOpenToolsDialog) }
     var pendingCameraUri by remember { mutableStateOf<Uri?>(null) }
 
     val multiDocumentLauncher = rememberLauncherForActivityResult(
@@ -170,6 +179,8 @@ fun HomeScreen(
     if (showSettingsDialog) {
         SettingsDialog(
             currentThemeMode = themeMode,
+            useDynamicColor = useDynamicColor,
+            accentPalette = accentPalette,
             currentLanguageMode = languageMode,
             outputSubfolderMode = outputSubfolderMode,
             customSubfolderName = customSubfolderName,
@@ -179,6 +190,8 @@ fun HomeScreen(
             defaultStripExif = defaultStripExif,
             tempCacheSizeBytes = tempCacheSizeBytes,
             onSelectThemeMode = onSelectThemeMode,
+            onToggleDynamicColor = onToggleDynamicColor,
+            onSelectAccentPalette = onSelectAccentPalette,
             onSelectLanguageMode = onSelectLanguageMode,
             onSelectOutputSubfolderMode = onSelectOutputSubfolderMode,
             onUpdateCustomSubfolderName = onUpdateCustomSubfolderName,
@@ -201,7 +214,14 @@ fun HomeScreen(
         )
     }
 
-    if (showOfflineToolsDialog) {
+    if (showGitHubUpdaterDialog) {
+        GitHubUpdaterDialog(
+            isEn = isEn,
+            onDismiss = { showGitHubUpdaterDialog = false }
+        )
+    }
+
+    if (showToolsDialog) {
         OfflineToolsSheetDialog(
             initialTabIndex = 0,
             loadedInputs = configureState.inputFiles,
@@ -210,7 +230,8 @@ fun HomeScreen(
             uriResolver = uriResolver,
             storageManager = storageManager,
             forensicHelper = forensicHelper,
-            onDismiss = { showOfflineToolsDialog = false }
+            onDeduplicateQueue = onDeduplicateQueue,
+            onDismiss = { showToolsDialog = false }
         )
     }
 
@@ -244,7 +265,7 @@ fun HomeScreen(
                                 fontWeight = FontWeight.ExtraBold
                             )
                             Text(
-                                text = "Universal Converter v0.3 • ${AnyWallCreditsCatalog.DEVELOPER_NAME}",
+                                text = "Universal Converter v0.4 • ${AnyWallCreditsCatalog.DEVELOPER_NAME}",
                                 style = MaterialTheme.typography.labelMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -252,16 +273,22 @@ fun HomeScreen(
                     }
                 },
                 actions = {
-                    IconButton(onClick = { showOfflineToolsDialog = true }) {
+                    IconButton(onClick = { showToolsDialog = true }) {
                         Icon(
                             imageVector = Icons.Default.Build,
-                            contentDescription = if (isEn) "Offline Tools" else "Herramientas Offline"
+                            contentDescription = if (isEn) "Tools" else "Herramientas"
                         )
                     }
                     IconButton(onClick = onOpenHistory) {
                         Icon(
                             imageVector = Icons.Default.History,
                             contentDescription = if (isEn) "History" else "Abrir Historial"
+                        )
+                    }
+                    IconButton(onClick = { showGitHubUpdaterDialog = true }) {
+                        Icon(
+                            imageVector = Icons.Default.SystemUpdate,
+                            contentDescription = if (isEn) "Check for Updates (GitHub)" else "Buscar actualizaciones en GitHub"
                         )
                     }
                     IconButton(onClick = { showCreditsDialog = true }) {
@@ -278,7 +305,7 @@ fun HomeScreen(
                     ) {
                         Icon(
                             imageVector = Icons.Default.Settings,
-                            contentDescription = if (isEn) "Settings" else "Ajustes Locales"
+                            contentDescription = if (isEn) "Settings" else "Ajustes"
                         )
                     }
                 },
@@ -316,12 +343,8 @@ fun HomeScreen(
                             )
                             .padding(20.dp)
                     ) {
-                        OfflinePrivacyBadge()
-
-                        Spacer(modifier = Modifier.height(14.dp))
-
                         Text(
-                            text = if (isEn) "On-Device Universal Converter" else "Conversor Universal en tu Dispositivo",
+                            text = if (isEn) "Universal File Converter" else "Conversor Universal de Archivos",
                             style = MaterialTheme.typography.headlineMedium,
                             fontWeight = FontWeight.ExtraBold,
                             color = MaterialTheme.colorScheme.onSurface
@@ -331,9 +354,9 @@ fun HomeScreen(
 
                         Text(
                             text = if (isEn) {
-                                "Convert files or entire folders, visually edit PDF pages & images, sign documents, encrypt AES-256 vaults, generate QR codes and process audio/video 100% offline."
+                                "Convert files or entire folders, edit photos & PDF pages with touch gestures, extract .rar/.rar5 & comics (.cbz/.cbr), sign documents, encrypt AES-256 vaults, generate QR codes and process audio/video."
                             } else {
-                                "Convierte archivos o carpetas enteras, edita páginas PDF e imágenes en vista previa, firma documentos, cifra en Bóveda AES-256, genera QR y procesa audio/video 100% sin red."
+                                "Convierte archivos o carpetas enteras, edita fotos y páginas PDF con gestos táctiles, extrae .rar/.rar5 y cómics (.cbz/.cbr), firma documentos, cifra en Bóveda AES-256, genera QR y procesa audio/video."
                             },
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -418,7 +441,7 @@ fun HomeScreen(
                         Spacer(modifier = Modifier.height(8.dp))
 
                         OutlinedButton(
-                            onClick = { showOfflineToolsDialog = true },
+                            onClick = { showToolsDialog = true },
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .height(44.dp),
@@ -432,9 +455,9 @@ fun HomeScreen(
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
                                 text = if (isEn) {
-                                    "Offline Tools: Metadata, SHA-256, QR, Diff & Slider"
+                                    "Tools: Metadata, SHA-256, Duplicates, QR, Diff & Slider"
                                 } else {
-                                    "Herramientas Offline: Metadatos, SHA-256, QR, Diff y Slider"
+                                    "Herramientas: Metadatos, SHA-256, Duplicados, QR, Diff y Slider"
                                 },
                                 style = MaterialTheme.typography.labelMedium,
                                 fontWeight = FontWeight.Bold
@@ -735,7 +758,7 @@ fun HomeScreen(
                             color = MaterialTheme.colorScheme.onSurface
                         )
                         Text(
-                            text = "AnyWall: Universal Converter v0.3 • Licencia AGPL-3.0",
+                            text = "AnyWall: Universal Converter v0.4 • Licencia AGPL-3.0",
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )

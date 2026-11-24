@@ -1,6 +1,6 @@
-# AnyWall: Universal Converter — Documento de Contexto Arquitectónico (v0.3)
+# AnyWall: Universal Converter — Documento de Contexto Arquitectónico (v0.4)
 
-Este documento sirve como referencia técnica viva para futuras iteraciones, mantenimiento y evolución de **AnyWall: Universal Converter** (`com.anywall.converter`). Contiene las reglas inquebrantables, decisiones de diseño, arquitectura de paquetes, detalle de los 5 motores locales, flujos de datos y guías de compilación actualizadas a la versión **v0.3**.
+Este documento sirve como referencia técnica viva para futuras iteraciones, mantenimiento y evolución de **AnyWall: Universal Converter** (`com.anywall.converter`). Contiene las reglas inquebrantables, decisiones de diseño, arquitectura de paquetes, detalle de los 5 motores locales, flujos de datos y guías de compilación actualizadas a la versión **v0.4**.
 
 ---
 
@@ -9,19 +9,19 @@ Este documento sirve como referencia técnica viva para futuras iteraciones, man
 - **Nombre de la app:** AnyWall: Universal Converter
 - **Autor / Desarrollador:** **SynthesizerEnd** (`https://github.com/ArukuSynthesis/AnyWall`)
 - **Application ID / Namespace:** `com.anywall.converter`
-- **Versión actual:** `versionCode = 3` • `versionName = "0.3"`
+- **Versión actual:** `versionCode = 4` • `versionName = "0.4"`
 - **Idioma de la interfaz:** Bilingüe Español / Inglés (`AppLanguageMode`: `Sistema`, `Español`, `English`)
-- **Propósito:** Conversor universal nativo de Android (imágenes, documentos/PDF/XLSX/EPUB, audio, video, archivos comprimidos, datos estructurados y seguridad criptográfica) con procesamiento **100% local en el hardware del dispositivo**, sin dependencias en la nube y operable íntegramente en modo avión.
-- **Estado actual:** Versión `v0.3` completa, funcional, sin stubs ni `// TODO`, con 5 motores locales (`ImageEngineImpl`, `DocumentEngineImpl`, `MediaEngineImpl`, `ArchiveEngineImpl`, `DataAndSecurityEngineImpl`), migraciones de Room (`v1 -> v2 -> v3` con `conversion_presets`), editores visuales de PDF e Imágenes, Firma Manuscrita, Bóveda Universal `AES-256-GCM`, QR offline, Inspector Forense & `SHA-256`, Diff local, Comparador Antes/Después, File Splitter/Joiner, Pipelines de 2 pasos y suite completa de pruebas unitarias pasando al 100%.
+- **Propósito:** Conversor universal nativo de Android (imágenes, documentos/PDF/XLSX/EPUB, audio, video, archivos comprimidos, datos estructurados y seguridad criptográfica) con todo el procesamiento ejecutado en el hardware del dispositivo y 0 permisos de red en el APK final.
+- **Estado actual:** Versión `v0.4` completa (temas AMOLED/Material You/acentos, cola Drag & Drop + Vista Rápida + estimador de tamaño, Smart Share Sheet, Estudio de Fotos táctil, `libarchive` NDK para `.rar`/`.rar5`/`.cbr`, cómics `.cbz`, línea de tiempo de video/audio, recorte de video, Auto-Gain + ID3v2.3, Estudio PDF táctil con anotaciones, renombrador masivo y detector de duplicados `SHA-256`), construida sobre la v0.3: funcional, sin stubs ni `// TODO`, con 5 motores locales (`ImageEngineImpl`, `DocumentEngineImpl`, `MediaEngineImpl`, `ArchiveEngineImpl`, `DataAndSecurityEngineImpl`), migraciones de Room (`v1 -> v2 -> v3` con `conversion_presets`), editores visuales de PDF e Imágenes, Firma Manuscrita, Bóveda Universal `AES-256-GCM`, QR offline, Inspector Forense & `SHA-256`, Diff local, Comparador Antes/Después, File Splitter/Joiner, Pipelines de 2 pasos y suite completa de pruebas unitarias pasando al 100%.
 
 ---
 
 ## 2. Reglas Inquebrantables de Arquitectura
 
-Cualquier iteración futura **debe respetar estrictamente** estas 7 reglas:
+Cualquier iteración futura **debe respetar estrictamente** estas 9 reglas:
 
-1. **ESTRICTAMENTE 100% OFFLINE:**
-   - Prohibido añadir `<uses-permission android:name="android.permission.INTERNET" />` o habilitar `ACCESS_NETWORK_STATE` en `app/src/main/AndroidManifest.xml` (de hecho, `ACCESS_NETWORK_STATE` tiene `tools:node="remove"` para eliminar el permiso transitivo de WorkManager).
+1. **CERO PERMISOS DE RED:**
+   - Prohibido añadir `INTERNET`, `ACCESS_NETWORK_STATE` o `ACCESS_WIFI_STATE` en `app/src/main/AndroidManifest.xml` (los tres se declaran con `tools:node="remove"` para eliminar cualquier permiso transitivo, p. ej. el de WorkManager).
    - Prohibido integrar APIs remotas, telemetría, Crashlytics, analítica o descarga de recursos externos.
    - En `WebViewPdfGenerator`, el `WebView` offscreen bloquea cargas de red (`blockNetworkLoads = true`, `blockNetworkImage = true`) e intercepta `http`/`https` devolviendo respuestas vacías.
 2. **CERO PLACEHOLDERS O STUBS:**
@@ -45,6 +45,12 @@ Cualquier iteración futura **debe respetar estrictamente** estas 7 reglas:
    - Escritura en `Downloads/AnyWall/` usando `MediaStore.Downloads` con `IS_PENDING` en API 29+ y almacenamiento público + `FileProvider` (con fallback a `getExternalFilesDir`) en API 26-28.
    - Registro automático de cada archivo generado en Room (`anywall_converter.db`, esquema v2) y apertura/compartición individual o múltiple mediante `FileProvider` / `MediaStore`.
 
+8. **SIN LEYENDAS DE PRIVACIDAD EN LA UI (v0.4):**
+   - La interfaz visible (`strings.xml`, `values-en/strings.xml`, pantallas, diálogos, Quick Tile) no muestra badges ni textos tipo *"100% Offline"*, *"Privado"*, *"Sin internet"* o *"Sin nube"*. La suite de utilidades se llama **"Herramientas"** / **"Tools"**. `OfflinePrivacyBadge` se conserva como composable vacío por compatibilidad de llamadas.
+9. **`libarchive` SOLO LECTURA Y LICENCIA `AGPL-3.0-only` (v0.4):**
+   - `libarchive` (`BSD-2-Clause`) se compila con NDK únicamente para explorar/extraer `.rar`, `.rar5` y `.cbr`. Nunca se debe generar salida `.rar` ni `.cbr`.
+   - Prohibido integrar código `UnRAR` de RARLAB; `LICENSE` permanece `AGPL-3.0-only` sin excepciones.
+
 ---
 
 ## 3. Stack Técnico y Versiones Exactas
@@ -61,6 +67,7 @@ Definido en `gradle/libs.versions.toml` y `app/build.gradle.kts`:
 | **Documentos / PDF** | `com.tom-roush:pdfbox-android:2.0.27.0` + `org.zwobble.mammoth:mammoth:1.5.0` |
 | **Audio / Video** | `androidx.media3:media3-{transformer,effect,common,muxer}:1.4.1` + `de.sciss:jump3r:1.0.5` |
 | **Archivos Comprimidos** | `org.apache.commons:commons-compress:1.26.1` + `org.tukaani:xz:1.9` |
+| **Nativo (v0.4)** | Android NDK `27.0.12077973`, CMake `3.22.1`, `libarchive v3.7.7` (`BSD-2-Clause`, lectores `RAR`/`RAR5`) → `libanywall_rar.so` para `arm64-v8a`, `armeabi-v7a`, `x86`, `x86_64` |
 
 ---
 
@@ -186,13 +193,52 @@ Pruebas unitarias y avisos legales actuales:
 
 ---
 
-## 6. Guía de Compilación y Verificación
+## 6. Novedades Técnicas de v0.4
+
+### Temas y UX (Fase 1)
+- **`AppPreferences`:** `ThemeMode` (`SYSTEM`, `LIGHT`, `DARK`, `AMOLED_BLACK`), `useDynamicColor` (Material You, API 31+) y `AccentPalette` (`INDIGO_STUDIO`, `EMERALD`, `AMBER`, `ROSE`, `CYAN`, `MONOCHROME`). `Theme.kt` fuerza `background`/`surface` a `#000000` en `AMOLED_BLACK`. Todo se configura desde `SettingsDialog`.
+- **`ConfigureScreen`:** reordenamiento *Drag & Drop* (pulsación larga + arrastre) sobre `InputFileCard`, **`QuickPeekDialog`** (zoom de imagen, mini reproductor, visor PDF/texto/comprimidos) y **`OutputSizeEstimator`** (estimación heurística por formato, calidad, resolución y bitrate).
+- **`SmartShareSheetDialog`:** se muestra al recibir `ACTION_SEND` / `ACTION_SEND_MULTIPLE` y propone acciones directas según MIME (imagen → editar/PDF/WEBP, PDF → editar/imágenes, video → recortar/GIF/MP3, audio → MP3/recortar, `.rar`/`.zip` → explorar/re-empaquetar).
+
+### Estudio de Fotos táctil (Fase 2)
+- **`ImageVisualEditorDialog`:** lienzo `#0B0D10` a pantalla completa con pestañas Recortar, Escáner, Ajustes, Filtros, Censura y Texto; 8 tiradores, cuadrícula 3×3, *pinch-to-zoom*/*pan*, dial de enderezado `-45°..+45°`, `CropAspectRatioPreset`, lupa 2.5× para el escáner, pila Deshacer/Rehacer, *hold to compare* y "Aplicar a todo el lote".
+- **`ImageEditSpec`:** añade `straightenDegrees`, `rotation90Steps`, `PerspectiveQuadSpec`, ajustes (exposición, brillo, contraste, saturación, temperatura, nitidez, viñeta), filtro + intensidad, `NormalizedRedactionStroke`/`NormalizedRedactionBox` con `CensorEffectMode` y marca de agua interactiva (posición, escala y rotación normalizadas), con serialización determinista.
+- **`ImageVisualTransformHelper`:** aplica el pipeline en orden perspectiva (`Matrix.setPolyToPoly`) → enderezado/rotación/volteo → recorte → `ColorMatrix` de ajustes y filtro → nitidez (convolución) → viñeta (`RadialGradient`) → censura → texto.
+
+### `libarchive`, re-empaquetado y cómics (Fase 3)
+- **`app/src/main/cpp/`:** `CMakeLists.txt`, `anywall_rar_jni.cpp` y subconjunto de fuentes `libarchive` (solo lectura RAR/RAR5).
+- **`LibArchiveRarBridge.kt`:** listado de entradas, extracción total/selectiva con contraseña, ordenación de volúmenes `.partN.rar` y sanitización anti-*Zip-Slip* de rutas.
+- **`ArchiveEngineImpl`:** explora/extrae `.rar`, `.rar5`, `.cbr` y **re-empaqueta en 1 paso** a `.zip`, `.7z`, `.tar.gz`, `.tar.xz`, `.tar.bz2`; cómics `.cbz` (entrada/salida) y `.cbr` (entrada) ↔ `PDF`/imágenes/`.cbz`. `ArchivePreviewDialog` integra el árbol, la selección y el re-empaquetado.
+
+### Video y audio táctil (Fase 4)
+- **`MediaTimelineTrimmerDialog`:** tira de fotogramas (`MediaMetadataRetriever`) o forma de onda PCM, 2 tiradores, reproductor integrado y captura del fotograma exacto.
+- **`VideoCropDialog`:** rectángulo de encuadre normalizado aplicado con `androidx.media3.effect.Crop` en `MediaEngineImpl`.
+- **`PcmWavMp3AudioHelper`:** Auto-Gain a `-1.0 dBFS` (pico), extracción de picos para la forma de onda y escritura/lectura de etiquetas ID3v2.3 con carátula `APIC` (`AudioMetadataSpec`).
+
+### Estudio PDF táctil (Fase 5)
+- **`PdfVisualEditorDialog`:** *Drag & Drop* de páginas, vista de página con *pinch-to-zoom*, firma manuscrita arrastrable/redimensionable (`signatureXNorm`, `signatureYNorm`, `signatureWidthNorm`), cajas de censura con el dedo, anotaciones `PdfPageAnnotation` (`TEXT`, `DATE_STAMP`, `HIGHLIGHTER` translúcido con `PDExtendedGraphicsState`) y escáner de 4 esquinas por página.
+
+### Herramientas de archivos (Fase 6)
+- **`BatchFileRenamer` + `BatchRenamerDialog`:** plantillas (`{nombre}`, `{indice}`, `{fecha}`, `{ext}`), prefijo/sufijo, buscar/reemplazar (texto o regex), capitalización y prevención de colisiones con vista previa Antes → Después; renombra sin reconvertir.
+- **`DuplicateFilesDetector`:** fase 1 agrupa por tamaño, fase 2 calcula `SHA-256` en streaming solo para los candidatos; conserva el primer archivo de cada grupo y propone eliminar el resto.
+
+### Créditos, CI y pruebas (Fase 7)
+- `AboutCreditsDialog` y `THIRD_PARTY_NOTICES.md` añaden `libarchive` (`BSD-2-Clause`) manteniendo a **SynthesizerEnd** como autor.
+- `.github/workflows/release.yml` instala NDK `27.0.12077973` y CMake `3.22.1`, compila, ejecuta pruebas y audita `INTERNET`/`ACCESS_NETWORK_STATE`/`ACCESS_WIFI_STATE`.
+- `AnyWallEngineUnitTest.kt` cubre la serialización v0.4 de `ImageEditSpec` y `PdfPageEditSpec`, `OutputSizeEstimator`, `BatchFileRenamer`, `DuplicateFilesDetector`, Auto-Gain/ID3v2.3 y la sanitización de rutas/volúmenes de `LibArchiveRarBridge`.
+
+---
+
+## 7. Guía de Compilación y Verificación
 
 ```bash
 # Compilar APK debug/release y ejecutar pruebas unitarias
 ./gradlew assembleDebug testDebugUnitTest
 
-# Compilar APK release v0.2 firmado mediante variables de entorno
+# Requisitos nativos (libarchive)
+sdkmanager "ndk;27.0.12077973" "cmake;3.22.1"
+
+# Compilar APK release v0.4 firmado mediante variables de entorno
 ANYWALL_KEYSTORE_PATH=/ruta/keystore.jks \
 ANYWALL_KEYSTORE_PASSWORD="..." \
 ANYWALL_KEY_ALIAS="..." \
@@ -201,5 +247,5 @@ ANYWALL_KEY_PASSWORD="..." \
 
 # Auditar permisos reales en el APK final (confirmar 0 permisos de red)
 aapt2 dump permissions app/build/outputs/apk/release/app-release.apk
-grep -rn "TODO" app/src/
+grep -rn "TODO" app/src/main/java app/src/main/cpp/anywall_rar_jni.cpp
 ```

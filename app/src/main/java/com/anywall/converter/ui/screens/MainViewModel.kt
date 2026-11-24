@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import androidx.work.WorkInfo
+import com.anywall.converter.core.AppAccentPalette
 import com.anywall.converter.core.AppContainer
 import com.anywall.converter.core.AppLanguageMode
 import com.anywall.converter.core.AppPreferences
@@ -14,10 +15,12 @@ import com.anywall.converter.core.OutputSubfolderMode
 import com.anywall.converter.core.ScopedStorageManager
 import com.anywall.converter.core.UriFileResolver
 import com.anywall.converter.data.engines.ArchiveEngineImpl
+import com.anywall.converter.data.engines.DuplicateFilesDetector
 import com.anywall.converter.data.engines.ForensicMetadataHelper
 import com.anywall.converter.domain.engine.ConverterEngineRegistry
 import com.anywall.converter.domain.model.ActiveJobState
 import com.anywall.converter.domain.model.ArchiveCompressionLevel
+import com.anywall.converter.domain.model.AudioMetadataSpec
 import com.anywall.converter.domain.model.ConversionOptions
 import com.anywall.converter.domain.model.ConversionPreset
 import com.anywall.converter.domain.model.FormatCategory
@@ -26,6 +29,8 @@ import com.anywall.converter.domain.model.ImageBatchLayoutMode
 import com.anywall.converter.domain.model.ImageEditSpec
 import com.anywall.converter.domain.model.InputFileItem
 import com.anywall.converter.domain.model.LineEndingOption
+import com.anywall.converter.domain.model.OutputSizeEstimate
+import com.anywall.converter.domain.model.OutputSizeEstimator
 import com.anywall.converter.domain.model.PdfActionMode
 import com.anywall.converter.domain.model.PdfPageEditItem
 import com.anywall.converter.domain.model.PdfPageOrientation
@@ -33,6 +38,7 @@ import com.anywall.converter.domain.model.PdfPageSize
 import com.anywall.converter.domain.model.SecondaryPipelineAction
 import com.anywall.converter.domain.model.SupportedFormat
 import com.anywall.converter.domain.model.TextEncodingOption
+import com.anywall.converter.domain.model.VideoCropSpec
 import com.anywall.converter.domain.model.VideoResolution
 import com.anywall.converter.domain.repository.ConversionHistoryRepository
 import com.anywall.converter.domain.repository.ConversionPresetRepository
@@ -65,6 +71,7 @@ data class ConfigureUiState(
     val targetImageMaxKbText: String = "",
     val targetVideoMaxMbText: String = "",
     val isResolvingFiles: Boolean = false,
+    val showSmartShareSheet: Boolean = false,
     val activeJob: ActiveJobState = ActiveJobState()
 ) {
     val totalInputBytes: Long
@@ -73,6 +80,17 @@ data class ConfigureUiState(
     val formattedTotalInputSize: String
         get() = InputFileItem.formatBytes(totalInputBytes)
 
+    val outputSizeEstimate: OutputSizeEstimate?
+        get() {
+            val target = selectedTargetFormat ?: return null
+            if (inputFiles.isEmpty()) return null
+            return OutputSizeEstimator.estimateBatchOutputSize(
+                inputs = inputFiles,
+                targetFormat = target,
+                options = options
+            )
+        }
+
     val visualPdfEditsList: List<PdfPageEditItem>
         get() = PdfPageEditItem.fromJsonArrayString(options.pdfVisualPageEditsJson)
 
@@ -80,20 +98,25 @@ data class ConfigureUiState(
         get() {
             val target = selectedTargetFormat ?: return false
             val allPdfs = inputFiles.isNotEmpty() && inputFiles.all { it.format == SupportedFormat.PDF }
-            return allPdfs && (target == SupportedFormat.PDF || target == SupportedFormat.JPG || target == SupportedFormat.PNG || target == SupportedFormat.WEBP)
+            return allPdfs && (target == SupportedFormat.PDF || target == SupportedFormat.JPG || target == SupportedFormat.PNG || target == SupportedFormat.WEBP || target == SupportedFormat.CBZ)
         }
 
     val showVisualImageEditorButton: Boolean
         get() {
             val target = selectedTargetFormat ?: return false
             val hasImages = inputFiles.any { it.format.category == FormatCategory.IMAGE }
-            return hasImages && (target.category == FormatCategory.IMAGE || target == SupportedFormat.PDF)
+            return hasImages && (target.category == FormatCategory.IMAGE || target == SupportedFormat.PDF || target == SupportedFormat.CBZ)
         }
 
     val showArchivePreviewButton: Boolean
         get() {
             val target = selectedTargetFormat ?: return false
-            return target == SupportedFormat.EXTRACT_ARCHIVE && inputFiles.isNotEmpty()
+            val hasArchiveInput = inputFiles.any {
+                it.format.category == FormatCategory.ARCHIVE ||
+                    it.format == SupportedFormat.CBZ ||
+                    it.format == SupportedFormat.CBR
+            }
+            return (target == SupportedFormat.EXTRACT_ARCHIVE || hasArchiveInput) && inputFiles.isNotEmpty()
         }
 
     val showQualitySlider: Boolean
@@ -274,6 +297,8 @@ class MainViewModel(
     val configureState: StateFlow<ConfigureUiState> = _configureState.asStateFlow()
 
     val themeMode: StateFlow<AppThemeMode> = appPreferences.themeMode
+    val useDynamicColor: StateFlow<Boolean> = appPreferences.useDynamicColor
+    val accentPalette: StateFlow<AppAccentPalette> = appPreferences.accentPalette
     val languageMode: StateFlow<AppLanguageMode> = appPreferences.languageMode
     val outputSubfolderMode: StateFlow<OutputSubfolderMode> = appPreferences.outputSubfolderMode
     val customSubfolderName: StateFlow<String> = appPreferences.customSubfolderName
@@ -353,6 +378,14 @@ class MainViewModel(
 
     fun setThemeMode(mode: AppThemeMode) {
         appPreferences.setThemeMode(mode)
+    }
+
+    fun setUseDynamicColor(enabled: Boolean) {
+        appPreferences.setUseDynamicColor(enabled)
+    }
+
+    fun setAccentPalette(palette: AppAccentPalette) {
+        appPreferences.setAccentPalette(palette)
     }
 
     fun setLanguageMode(mode: AppLanguageMode) {
@@ -443,7 +476,8 @@ class MainViewModel(
     fun addInputUris(
         uris: List<Uri>,
         replaceExisting: Boolean = false,
-        navigateToConfigure: Boolean = true
+        navigateToConfigure: Boolean = true,
+        fromShareSheet: Boolean = false
     ) {
         if (uris.isEmpty()) return
         viewModelScope.launch {
@@ -465,6 +499,7 @@ class MainViewModel(
                             selectedArchiveEntriesSerialized = ""
                         ),
                         isResolvingFiles = false,
+                        showSmartShareSheet = fromShareSheet && mergedInputs.isNotEmpty(),
                         activeJob = if (replaceExisting && !current.activeJob.isRunning) {
                             ActiveJobState()
                         } else {
@@ -526,8 +561,62 @@ class MainViewModel(
         addInputUris(
             uris = uris,
             replaceExisting = true,
-            navigateToConfigure = true
+            navigateToConfigure = true,
+            fromShareSheet = true
         )
+    }
+
+    fun dismissSmartShareSheet() {
+        _configureState.update { it.copy(showSmartShareSheet = false) }
+    }
+
+    fun moveInputFile(fromIndex: Int, toIndex: Int) {
+        _configureState.update { current ->
+            if (fromIndex !in current.inputFiles.indices ||
+                toIndex !in current.inputFiles.indices ||
+                fromIndex == toIndex
+            ) {
+                return@update current
+            }
+            val mutable = current.inputFiles.toMutableList()
+            val item = mutable.removeAt(fromIndex)
+            mutable.add(toIndex, item)
+            current.copy(
+                inputFiles = mutable,
+                options = current.options.copy(pdfVisualPageEditsJson = "")
+            )
+        }
+    }
+
+    fun replaceInputFilesList(newItems: List<InputFileItem>) {
+        _configureState.update { current ->
+            recalculateAvailableFormats(
+                current.copy(
+                    inputFiles = newItems,
+                    options = current.options.copy(pdfVisualPageEditsJson = "")
+                )
+            )
+        }
+    }
+
+    fun deduplicateCurrentInputFiles(onResultCount: (Int) -> Unit = {}) {
+        val currentList = _configureState.value.inputFiles
+        if (currentList.size <= 1) {
+            onResultCount(0)
+            return
+        }
+        viewModelScope.launch {
+            val report = withContext(Dispatchers.IO) {
+                DuplicateFilesDetector.scanInputItemsForDuplicates(
+                    items = currentList,
+                    uriResolver = uriFileResolver
+                )
+            }
+            if (report.hasDuplicates) {
+                replaceInputFilesList(report.deduplicatedList)
+            }
+            onResultCount(report.totalRedundantFilesCount)
+        }
     }
 
     fun moveInputFileUp(index: Int) {
@@ -953,6 +1042,59 @@ class MainViewModel(
     fun updateQrCustomText(text: String) {
         _configureState.update { current ->
             current.copy(options = current.options.copy(qrCustomText = text))
+        }
+    }
+
+    fun updateArchivePassword(password: String) {
+        _configureState.update { current ->
+            current.copy(options = current.options.copy(archivePassword = password))
+        }
+    }
+
+    fun updateTrimRangeMillis(startMs: Long, endMs: Long) {
+        _configureState.update { current ->
+            val startSec = if (startMs > 0L) (startMs / 1000L) else null
+            val endSec = if (endMs > startMs) (endMs / 1000L) else null
+            current.copy(
+                trimStartText = startSec?.toString().orEmpty(),
+                trimEndText = endSec?.toString().orEmpty(),
+                options = current.options.copy(
+                    trimStartMillis = startMs.coerceAtLeast(0L),
+                    trimEndMillis = endMs.coerceAtLeast(0L),
+                    trimStartSeconds = startSec,
+                    trimEndSeconds = endSec
+                )
+            )
+        }
+    }
+
+    fun updateVideoCropSpec(spec: VideoCropSpec) {
+        _configureState.update { current ->
+            current.copy(
+                options = current.options.copy(
+                    videoCropSerialized = spec.toSerializedString()
+                )
+            )
+        }
+    }
+
+    fun updateAudioNormalizeAutoGain(enabled: Boolean) {
+        _configureState.update { current ->
+            current.copy(
+                options = current.options.copy(
+                    audioNormalizeAutoGain = enabled
+                )
+            )
+        }
+    }
+
+    fun updateAudioMetadataSpec(spec: AudioMetadataSpec) {
+        _configureState.update { current ->
+            current.copy(
+                options = current.options.copy(
+                    audioMetadataSerialized = spec.toSerializedString()
+                )
+            )
         }
     }
 

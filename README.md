@@ -1,34 +1,45 @@
-# AnyWall: Universal Converter (v0.3)
+# AnyWall: Universal Converter (v0.4)
 
-**Conversor Universal 100% Offline para Android** desarrollado por **SynthesizerEnd**.
+**Conversor Universal para Android** desarrollado por **SynthesizerEnd**.
 
-**AnyWall** (`com.anywall.converter`) convierte imágenes, documentos Office/PDF/XLSX/EPUB, video, audio, archivos comprimidos y datos estructurados/bóvedas criptográficas ejecutando todo el procesamiento **100% en el hardware local del dispositivo**, sin permisos de red (`INTERNET` ni `ACCESS_NETWORK_STATE`) y funcionando íntegramente en modo avión.
+**AnyWall** (`com.anywall.converter`) convierte y edita imágenes, documentos Office/PDF/XLSX/EPUB, video, audio, cómics, archivos comprimidos y datos estructurados ejecutando todo el procesamiento en el hardware del dispositivo. El APK final declara **0 permisos de red** (`INTERNET`, `ACCESS_NETWORK_STATE`, `ACCESS_WIFI_STATE`), verificado automáticamente en CI con `aapt2 dump permissions`.
+
+- **Versión:** `versionCode = 4` • `versionName = "0.4"`
+- **Android mínimo:** 8.0 (API 26) • **Target SDK:** 35
 
 ---
 
-## Características Principales (v0.3)
+## Novedades de v0.4
 
-- **100% Offline y Privado:** 0 permisos de red en el APK final (auditado automáticamente con `aapt2 dump permissions`).
-- **Motor 1 — Imágenes, Editor Visual, Collages e Íconos (`ImageEngineImpl`):**
-  - Conversión entre `JPG`, `PNG`, `WEBP`, `BMP` (24-bit), **`.ICO`**, **`GIF` animado** y **Paquete de Íconos ZIP (`48/96/192/512px + favicon.ico`)**, más soporte de entrada `HEIC`/`HEIF`, **`AVIF`**, `GIF` y `SVG`.
-  - **Editor Visual de Imágenes en Vista Previa (`ImageVisualEditorDialog`):** recorte interactivo por proporciones, volteo H/V, filtros (`Grises`, `Escáner B/N Alto Contraste`, `Invertir`), encuadre con fondo Difuminado (*Blur*) o sólido, censura/pixelado por zonas y marca de agua de texto.
-  - **Compresión por peso máximo objetivo (`KB`)** mediante búsqueda binaria local, **Collages (`2×2`, `3×3`)** y **Tiras continuas (`Vertical`, `Horizontal`)**.
-- **Motor 2 — Documentos, PDF Profesional, Firma, `XLSX` y `EPUB` (`DocumentEngineImpl`):**
-  - **Modificador Visual de PDF en Vista Previa (`PdfVisualEditorDialog`):** reordenamiento libre, rotación (`+90°`), exclusión, duplicación de páginas, inserción de páginas separadoras en blanco, censura sobre páginas y **Firma Manuscrita local (`SignaturePadDialog`)**.
-  - Marca de agua diagonal en PDF, numeración automática `"Página X de Y"`, sello QR en PDF, división cada *N* páginas, **extractor de imágenes originales embebidas** y **modo Folleto/Cuadrícula (`2-en-1` y `4-en-1`)**.
-  - Soporte en Kotlin puro de hojas de cálculo **`.xlsx`** (`XlsxPureParser`) y libros electrónicos **`.epub` (EPUB 3)** (`EpubPureConverter`), además de `DOCX`, `HTML`, `TXT` y `MD`.
-- **Motor 3 — Audio y Video Avanzado (`MediaEngineImpl`):**
-  - Conversión de video (`MP4`, `MKV`, `MOV`, `WEBM`) con resolución (`Original`, `1080p`, `720p`, `480p`), silenciado, recorte (`Trim`), **velocidad (`0.5x..2.0x`)**, **rotación/espejo**, **compresión por peso objetivo en `MB`**, **unión (concatenación) de clips** y **Video → GIF animado / Fotogramas**.
-  - Audio (`MP3`, `AAC`, `M4A`, `WAV`) con entrada **`FLAC`**, **`OGG`** y **`OPUS`**, selector de **bitrate (`128`/`192`/`320 kbps`)**, **Fade In/Out** y modo **Ringtone**.
-- **Motor 4 — Archivos Comprimidos y Particionado (`ArchiveEngineImpl`):**
-  - Empaquetado en `.zip`, `.tar`, `.tar.gz`, `.tar.xz` y `.tar.bz2` con selector de nivel (`Rápido`, `Equilibrado`, `Máximo`) y preservación de subcarpetas.
-  - **Explorador Previo (`ArchivePreviewDialog`)** con extracción selectiva y **Divisor/Reconstructor de archivos grandes (`.part001`, `.part002`…)** con verificación `SHA-256`.
-- **Motor 5 — Datos Estructurados, Bóveda `AES-256-GCM` y Códigos QR (`DataAndSecurityEngineImpl`):**
-  - Conversión entre `CSV`, `JSON`, `XML`, `YAML`, `BASE64`, `HTML`, `TXT` y `PDF`, con *Pretty Print*, conversión de codificación (`UTF-8`, `ISO-8859-1`, `Windows-1252`, `UTF-16`) y saltos de línea (`LF` ↔ `CRLF`).
-  - **Bóveda Universal `AES-256-GCM` (`.anywall`)** con derivación `PBKDF2-HMAC-SHA256` (120 000 iteraciones) y **Generador/Escáner QR Offline (`PNG` y `SVG`)**.
-- **Suite de Herramientas Offline, Presets Room v3 y Automatización:**
-  - **Inspector Forense de Metadatos (EXIF/GPS/PDF/Media) y Verificador `SHA-256` / `MD5`**, **Comparador Local Diff (LCS)** y **Comparador Visual «Antes / Después»**.
-  - **Perfiles / Presets Rápidos** guardables (Room v3), captura desde **Cámara / Escáner**, plantillas de renombrado (`{nombre}`, `{indice}`, `{fecha}`, `{formato}`), **Pipelines de 2 pasos**, estadísticas de ahorro, bloqueo biométrico/PIN del historial, soporte bilingüe (`ES`/`EN`), **App Shortcuts** y **Quick Settings Tile**.
+- **Temas y personalización (`AppPreferences` + `SettingsDialog`):** modos `Sistema`, `Claro`, `Oscuro` y **`Negro AMOLED` (`#000000`)**, **Material You** (`useDynamicColor`, Android 12+) y paleta de acento `Indigo Studio`, `Esmeralda`, `Ámbar`, `Rosa`, `Cian` y `Monocromo`.
+- **Cola inteligente en `ConfigureScreen`:** reordenamiento táctil *Drag & Drop* (mantener pulsado y arrastrar), **Vista Rápida (`QuickPeekDialog`)** con zoom de imagen, mini reproductor de video/audio y visor de PDF/texto/comprimidos, y **estimador de tamaño de salida (`OutputSizeEstimator`)**.
+- **Smart Share Sheet (`SmartShareSheetDialog`):** al compartir archivos hacia AnyWall (`ACTION_SEND` / `ACTION_SEND_MULTIPLE`) se ofrecen acciones directas de 1 toque según el tipo MIME.
+- **Estudio de Fotos 100% táctil (`ImageVisualEditorDialog`):** lienzo oscuro a pantalla completa (`#0B0D10`) sin sliders de recorte:
+  - Recorte con **8 tiradores**, cuadrícula 3×3 al arrastrar, *pinch-to-zoom* + *pan*, **dial de enderezado** (`-45°..+45°`), rotación `90°`, volteo H/V y proporciones `Libre`, `Original`, `1:1`, `4:5`, `3:4`, `16:9`, `9:16`.
+  - **Escáner de perspectiva de 4 esquinas** con lupa 2.5× (`Matrix.setPolyToPoly`).
+  - **Ajustes en vivo:** Exposición, Brillo, Contraste, Saturación, Temperatura, Nitidez y Viñeta.
+  - **Filtros con miniaturas reales** de la foto + intensidad `0–100%`.
+  - **Censura táctil:** pincel libre y rectángulos arrastrables (`Pixelado`, `Blur`, `Negro sólido`).
+  - **Texto / marca de agua interactiva** (arrastrar con 1 dedo, escalar/rotar con 2), **Deshacer / Rehacer**, *mantener para comparar* (Antes/Después) y **"Aplicar a todo el lote"**.
+- **`.rar` / `.rar5` con `libarchive` (`BSD-2-Clause`, NDK + JNI):** exploración, extracción total o selectiva, contraseñas, volúmenes `.part1.rar` y protección anti-*Zip-Slip*, más **re-empaquetado en 1 paso** a `.zip`, `.7z`, `.tar.gz`, `.tar.xz` y `.tar.bz2`. AnyWall **nunca crea** archivos `.rar`.
+- **Cómics:** `.cbz` (entrada/salida) y `.cbr` (entrada) ↔ `PDF` / imágenes / `.cbz`.
+- **Video y audio táctil:**
+  - **`MediaTimelineTrimmerDialog`:** línea de tiempo con tira de fotogramas reales (video) o forma de onda PCM (audio), 2 tiradores de inicio/fin, reproductor integrado y **"Capturar fotograma exacto"**.
+  - **`VideoCropDialog`:** recorte táctil del encuadre aplicado con `androidx.media3.effect.Crop`.
+  - **Auto-Gain** (normalización a `-1.0 dBFS`) y editor de etiquetas **ID3v2.3 + carátula** (`AudioMetadataSpec`) para `MP3`/`M4A`.
+- **Estudio PDF táctil (`PdfVisualEditorDialog`):** *Drag & Drop* de páginas, vista con *pinch-to-zoom*, firma manuscrita arrastrable/redimensionable, cajas de censura trazadas con el dedo, anotaciones (texto, sello de fecha y resaltador translúcido con `PDExtendedGraphicsState`) y escáner de 4 esquinas.
+- **Herramientas de archivos:**
+  - **Renombrador masivo (`BatchRenamerDialog` + `BatchFileRenamer`):** plantillas, prefijo/sufijo, buscar/reemplazar (texto o regex), capitalización y vista previa Antes → Después, sin reconvertir.
+  - **Detector/limpiador de duplicados (`DuplicateFilesDetector`):** agrupación por tamaño + `SHA-256` en streaming.
+
+## Funciones heredadas (v0.1–v0.3)
+
+- **Imágenes (`ImageEngineImpl`):** `JPG`, `PNG`, `WEBP`, `BMP`, `.ICO`, `GIF` animado, paquete de íconos ZIP; entrada `HEIC`/`HEIF`, `AVIF`, `GIF`, `SVG`; compresión por peso objetivo (`KB`), collages y tiras.
+- **Documentos (`DocumentEngineImpl`):** PDF (unir, dividir, comprimir, cifrar/descifrar, numeración, marca de agua, folleto 2-en-1/4-en-1, extractor de imágenes), `DOCX`, `HTML`, `TXT`, `MD`, `XLSX` y `EPUB 3`.
+- **Audio/Video (`MediaEngineImpl`):** `MP4`, `MKV`, `MOV`, `WEBM`, `MP3`, `AAC`, `M4A`, `WAV` (+ entrada `FLAC`/`OGG`/`OPUS`), resolución, velocidad, rotación/espejo, concatenación, Video → GIF/fotogramas, bitrate, Fade In/Out y Ringtone.
+- **Comprimidos (`ArchiveEngineImpl`):** `.zip`, `.7z`, `.tar`, `.tar.gz`, `.tar.xz`, `.tar.bz2`, `.gz`, `.xz`, `.bz2` y divisor/reconstructor `.part001` con verificación `SHA-256`.
+- **Datos y seguridad (`DataAndSecurityEngineImpl`):** `CSV` ↔ `JSON` ↔ `XML` ↔ `YAML` ↔ `BASE64`, bóveda `AES-256-GCM` (`.anywall`) y generador/escáner QR (`PNG`/`SVG`).
+- **Herramientas:** inspector de metadatos, verificador `SHA-256`/`MD5`, comparador Diff, comparador visual Antes/Después, presets Room, pipelines de 2 pasos, bloqueo biométrico/PIN del historial, interfaz bilingüe (`ES`/`EN`), App Shortcuts y Quick Settings Tile.
 
 ---
 
@@ -36,7 +47,7 @@
 
 - **Desarrollador Principal:** **SynthesizerEnd** (https://github.com/ArukuSynthesis/AnyWall)
 - **Licencia del Proyecto:** `AGPL-3.0-only` (ver [LICENSE](LICENSE))
-- **Créditos y Repositorios de Terceros:** Consulta [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) o la sección **"Acerca de AnyWall y Créditos"** dentro de la aplicación:
+- **Créditos y Repositorios de Terceros:** consulta [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) o **"Acerca de AnyWall y Créditos"** dentro de la aplicación:
   - **AndroidX & Jetpack Compose** (`Apache-2.0`) — https://github.com/androidx/androidx
   - **AndroidX Media3** (`Apache-2.0`) — https://github.com/androidx/media
   - **PDFBox-Android** (`Apache-2.0`) — https://github.com/TomRoush/PdfBox-Android
@@ -46,13 +57,17 @@
   - **XZ for Java** (`0BSD`) — https://github.com/tukaani-project/xz-java
   - **jump3r (Java LAME MP3)** (`LGPL-2.1-or-later`) — https://github.com/Sciss/jump3r
   - **ZXing Core (QR Engine)** (`Apache-2.0`) — https://github.com/zxing/zxing
+  - **libarchive** (`BSD-2-Clause`) — https://github.com/libarchive/libarchive
   - **Kotlin & Coroutines** (`Apache-2.0`) — https://github.com/JetBrains/kotlin
 
 ---
 
 ## Compilación
 
+Requisitos: JDK 17, Android SDK 35 (Build Tools `35.0.0`), **Android NDK `27.0.12077973`** y **CMake `3.22.1`** (para `libarchive`).
+
 ```bash
+sdkmanager "ndk;27.0.12077973" "cmake;3.22.1"
 ./gradlew assembleRelease testReleaseUnitTest
 ```
 

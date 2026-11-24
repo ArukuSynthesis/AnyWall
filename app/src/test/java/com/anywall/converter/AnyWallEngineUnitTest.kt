@@ -30,6 +30,19 @@ import com.anywall.converter.domain.model.PdfPageEditItem
 import com.anywall.converter.domain.model.SecondaryPipelineAction
 import com.anywall.converter.domain.model.SupportedFormat
 import com.anywall.converter.ui.components.AnyWallCreditsCatalog
+import com.anywall.converter.data.engines.BatchFileRenamer
+import com.anywall.converter.data.engines.DuplicateFilesDetector
+import com.anywall.converter.data.engines.LibArchiveRarBridge
+import com.anywall.converter.domain.model.AudioMetadataSpec
+import com.anywall.converter.domain.model.CensorEffectMode
+import com.anywall.converter.domain.model.CropAspectRatioPreset
+import com.anywall.converter.domain.model.NormalizedRedactionStroke
+import com.anywall.converter.domain.model.OutputSizeEstimator
+import com.anywall.converter.domain.model.PdfAnnotationType
+import com.anywall.converter.domain.model.PdfPageAnnotation
+import com.anywall.converter.domain.model.PerspectiveQuadSpec
+import com.anywall.converter.domain.model.VideoCropSpec
+import com.anywall.converter.ui.components.GitHubUpdaterHelper
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -448,5 +461,338 @@ class AnyWallEngineUnitTest {
             tempWav.delete()
             tempMp3.delete()
         }
+    }
+
+    @Test
+    fun v04_photoStudio_pdfTouchAnnotations_videoCrop_andAudioMetadata_roundTripSerialization() {
+        val stroke = NormalizedRedactionStroke(
+            points = listOf(0.12f to 0.18f, 0.45f to 0.52f, 0.78f to 0.84f),
+            strokeWidthNorm = 0.06f,
+            effectMode = CensorEffectMode.PIXELATE
+        )
+        val quad = PerspectiveQuadSpec(
+            tlX = 0.05f, tlY = 0.06f,
+            trX = 0.94f, trY = 0.04f,
+            brX = 0.96f, brY = 0.95f,
+            blX = 0.03f, blY = 0.92f
+        )
+        assertTrue(quad.isModified)
+
+        val specV04 = ImageEditSpec(
+            cropLeftNorm = 0.08f,
+            cropTopNorm = 0.12f,
+            cropRightNorm = 0.88f,
+            cropBottomNorm = 0.92f,
+            flipHorizontal = true,
+            flipVertical = false,
+            filterPreset = ImageFilterPreset.WARM_VINTAGE,
+            aspectCanvasMode = ImageAspectCanvasMode.ORIGINAL,
+            watermarkText = "SynthesizerEnd v0.4",
+            watermarkOpacityPercent = 82,
+            redactionBoxes = listOf(
+                NormalizedRedactionBox(0.2f, 0.3f, 0.6f, 0.5f, isPixelated = false, effectMode = CensorEffectMode.BLUR)
+            ),
+            straightenDegrees = -14.5f,
+            rotation90Degrees = 90,
+            cropAspectRatioPreset = CropAspectRatioPreset.RATIO_4_5,
+            perspectiveQuad = quad,
+            exposure = 25.0f,
+            brightness = 0.15f,
+            contrast = 0.30f,
+            saturation = -0.20f,
+            temperature = 0.40f,
+            sharpness = 55.0f,
+            vignette = 0.35f,
+            filterIntensityPercent = 75,
+            redactionStrokes = listOf(stroke),
+            watermarkPosXNorm = 0.42f,
+            watermarkPosYNorm = 0.76f,
+            watermarkScale = 1.45f,
+            watermarkRotationDegrees = -22f,
+            watermarkColorArgb = 0xFF00E5FF.toInt(),
+            applyToAllBatch = false
+        )
+
+        val rawSpec = specV04.toSerializedString()
+        val restoredSpec = ImageEditSpec.fromSerializedString(rawSpec)
+        assertEquals(-14.5f, restoredSpec.straightenDegrees, 0.02f)
+        assertEquals(90, restoredSpec.normalizedRotation90)
+        assertEquals(CropAspectRatioPreset.RATIO_4_5, restoredSpec.cropAspectRatioPreset)
+        assertTrue(restoredSpec.perspectiveQuad.isModified)
+        assertEquals(25.0f, restoredSpec.exposure, 0.05f)
+        assertEquals(55.0f, restoredSpec.sharpness, 0.05f)
+        assertEquals(75, restoredSpec.filterIntensityPercent)
+        assertEquals(1, restoredSpec.redactionStrokes.size)
+        assertEquals(3, restoredSpec.redactionStrokes[0].points.size)
+        assertEquals(CensorEffectMode.BLUR, restoredSpec.redactionBoxes[0].effectMode)
+        assertEquals(1.45f, restoredSpec.watermarkScale, 0.01f)
+        assertEquals(-22f, restoredSpec.watermarkRotationDegrees, 0.1f)
+        assertFalse(restoredSpec.applyToAllBatch)
+
+        val pdfItemV04 = PdfPageEditItem(
+            id = "pdf_v04#0",
+            sourceUriString = "content://pdf/v04",
+            sourceDisplayName = "contrato.pdf",
+            originalPageIndex = 0,
+            totalPagesInSource = 2,
+            rotationDegrees = 180,
+            included = true,
+            hasSignatureStamp = true,
+            signatureXNorm = 0.58f,
+            signatureYNorm = 0.78f,
+            signatureWidthNorm = 0.32f,
+            annotations = listOf(
+                PdfPageAnnotation(
+                    type = PdfAnnotationType.HIGHLIGHTER,
+                    xNorm = 0.10f,
+                    yNorm = 0.25f,
+                    endXNorm = 0.80f,
+                    endYNorm = 0.28f,
+                    text = "",
+                    colorArgb = 0xFFFFEB3B.toInt()
+                ),
+                PdfPageAnnotation(
+                    type = PdfAnnotationType.DATE_STAMP,
+                    xNorm = 0.70f,
+                    yNorm = 0.12f,
+                    text = "2026-11-24"
+                )
+            ),
+            perspectiveQuad = quad
+        )
+
+        val pdfRaw = PdfPageEditItem.toJsonArrayString(listOf(pdfItemV04))
+        val pdfRestored = PdfPageEditItem.fromJsonArrayString(pdfRaw).single()
+        assertEquals(0.58f, pdfRestored.signatureXNorm, 0.01f)
+        assertEquals(0.32f, pdfRestored.signatureWidthNorm, 0.01f)
+        assertEquals(2, pdfRestored.annotations.size)
+        assertEquals(PdfAnnotationType.HIGHLIGHTER, pdfRestored.annotations[0].type)
+        assertEquals("2026-11-24", pdfRestored.annotations[1].text)
+        assertTrue(pdfRestored.perspectiveQuad.isModified)
+
+        val cropSpec = VideoCropSpec(leftNorm = 0.10f, topNorm = 0.15f, rightNorm = 0.90f, bottomNorm = 0.85f)
+        assertTrue(cropSpec.isActive)
+        val restoredCrop = VideoCropSpec.deserialize(cropSpec.serialize())
+        assertEquals(0.10f, restoredCrop.leftNorm, 0.005f)
+        assertEquals(0.85f, restoredCrop.bottomNorm, 0.005f)
+        assertTrue(restoredCrop.ndcLeft < restoredCrop.ndcRight)
+        assertTrue(restoredCrop.ndcBottom < restoredCrop.ndcTop)
+
+        val audioMeta = AudioMetadataSpec(
+            title = "Neon Horizon",
+            artist = "SynthesizerEnd",
+            album = "AnyWall v0.4",
+            year = "2026",
+            genre = "Synthwave",
+            coverArtPathOrUri = "content://covers/1"
+        )
+        val restoredMeta = AudioMetadataSpec.deserialize(audioMeta.serialize())
+        assertEquals("Neon Horizon", restoredMeta.title)
+        assertEquals("SynthesizerEnd", restoredMeta.artist)
+        assertEquals("content://covers/1", restoredMeta.coverArtUriString)
+    }
+
+    @Test
+    fun v04_libArchiveRarBridge_sanitizesZipSlip_ordersVolumes_andExtractsRar5WithPassword() {
+        val rar5Header = byteArrayOf(0x52, 0x61, 0x72, 0x21, 0x1A, 0x07, 0x01, 0x00)
+        assertTrue(LibArchiveRarBridge.isRarMagicHeader(rar5Header))
+        assertTrue(LibArchiveRarBridge.isRar5MagicHeader(rar5Header))
+
+        assertEquals(
+            "etc/shadow",
+            LibArchiveRarBridge.sanitizeRarEntryPath("../../../etc/shadow")
+        )
+        assertEquals(
+            "Windows/System32/drivers/etc/hosts",
+            LibArchiveRarBridge.sanitizeRarEntryPath("C:\\Windows\\System32\\..\\drivers\\etc\\hosts")
+        )
+
+        val f1 = File("pack.part3.rar")
+        val f2 = File("pack.part1.rar")
+        val f3 = File("pack.part2.rar")
+        val ordered = LibArchiveRarBridge.orderMultiVolumeRarFiles(listOf(f1, f2, f3))
+        assertEquals(listOf("pack.part1.rar", "pack.part2.rar", "pack.part3.rar"), ordered.map { it.name })
+
+        val rarBytes = LibArchiveRarBridge.buildSyntheticRar5ContainerForTesting(
+            entries = listOf(
+                "docs/leeme.txt" to "Hola desde RAR5 con libarchive BSD-2-Clause".toByteArray(Charsets.UTF_8),
+                "../../escape/secreto.txt" to "Contenido protegido anti-Zip-Slip".toByteArray(Charsets.UTF_8)
+            ),
+            passphrase = "ClaveRar2026!"
+        )
+        val tempRar = File.createTempFile("test_v04_", ".rar")
+        val extractDir = File(tempRar.parentFile, "rar5_out_${System.nanoTime()}").apply { mkdirs() }
+        try {
+            tempRar.writeBytes(rarBytes)
+            val entries = LibArchiveRarBridge.inspectRarEntries(
+                volumeFiles = listOf(tempRar),
+                passphrase = "ClaveRar2026!"
+            )
+            assertEquals(2, entries.size)
+            assertTrue(entries.all { it.isEncrypted })
+            assertEquals("escape/secreto.txt", entries[1].entryPath)
+
+            val extractedFiles = LibArchiveRarBridge.extractRarArchive(
+                volumeFiles = listOf(tempRar),
+                outputDir = extractDir,
+                selectedEntries = setOf("docs/leeme.txt"),
+                passphrase = "ClaveRar2026!"
+            )
+            assertEquals(1, extractedFiles.size)
+            assertEquals(
+                "Hola desde RAR5 con libarchive BSD-2-Clause",
+                extractedFiles[0].readText(Charsets.UTF_8)
+            )
+        } finally {
+            tempRar.delete()
+            extractDir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun v04_audioAutoGain_waveformPeaks_andId3v23ApicTag_workCorrectly() {
+        val sampleRate = 22050
+        val sampleCount = 4096
+        val quietPcm = ByteArray(sampleCount * 2)
+        val bb = ByteBuffer.wrap(quietPcm).order(ByteOrder.LITTLE_ENDIAN)
+        for (i in 0 until sampleCount) {
+            val v = (sin(2.0 * Math.PI * 440.0 * i / sampleRate) * 3200.0).toInt().toShort()
+            bb.putShort(v)
+        }
+
+        val inPcm = File.createTempFile("quiet_", ".pcm")
+        val outPcm = File.createTempFile("norm_", ".pcm")
+        val mp3File = File.createTempFile("tagged_", ".mp3")
+        try {
+            inPcm.writeBytes(quietPcm)
+            val peaks = PcmWavMp3AudioHelper.extractWaveformPeaksFromPcmFile(inPcm, bucketCount = 32)
+            assertEquals(32, peaks.size)
+            assertTrue(peaks.all { it in 0.06f..1.0f })
+
+            val info = PcmWavMp3AudioHelper.DecodedPcmInfo(
+                pcmFile = inPcm,
+                sampleRate = sampleRate,
+                channelCount = 1,
+                totalPcmBytes = quietPcm.size.toLong()
+            )
+            val normalizedInfo = PcmWavMp3AudioHelper.normalizePcm16LeToTargetDbFs(
+                pcmInfo = info,
+                outputPcmFile = outPcm,
+                targetDbFs = -1.0
+            )
+            val newPeak = PcmWavMp3AudioHelper.computePeakAmplitudePcm16Le(normalizedInfo.pcmFile)
+            // -1.0 dBFS de 32767 es ~29204
+            assertTrue("Expected normalized peak near 29204, got $newPeak", newPeak in 28800..29500)
+
+            PcmWavMp3AudioHelper.encodePcm16LeToMp3(
+                pcmInfo = normalizedInfo,
+                outputMp3File = mp3File,
+                qualityPercent = 85,
+                explicitBitrateKbps = 192,
+                onProgress = {}
+            )
+            val fakeCoverJpeg = byteArrayOf(0xFF.toByte(), 0xD8.toByte(), 0xFF.toByte(), 0xE0.toByte(), 1, 2, 3, 4)
+            val meta = AudioMetadataSpec(
+                title = "Pista Normalizada",
+                artist = "SynthesizerEnd",
+                album = "AnyWall Studio",
+                year = "2026",
+                genre = "Electronic"
+            )
+            PcmWavMp3AudioHelper.writeId3v23TagsToMp3File(
+                mp3File = mp3File,
+                metadata = meta,
+                coverArtBytes = fakeCoverJpeg,
+                coverMimeType = "image/jpeg"
+            )
+            val parsedTags = PcmWavMp3AudioHelper.parseId3v23TagsFromBytes(mp3File.readBytes())
+            assertEquals("Pista Normalizada", parsedTags["TIT2"])
+            assertEquals("SynthesizerEnd", parsedTags["TPE1"])
+            assertEquals("AnyWall Studio", parsedTags["TALB"])
+            assertEquals("2026", parsedTags["TYER"])
+            assertTrue((parsedTags["APIC_BYTES"]?.toIntOrNull() ?: 0) > fakeCoverJpeg.size)
+        } finally {
+            inPcm.delete()
+            outPcm.delete()
+            mp3File.delete()
+        }
+    }
+
+    @Test
+    fun v04_batchFileRenamer_duplicateDetector_andGitHubUpdaterHelper_workCorrectly() {
+        val originals = listOf("Foto Vacaciones.JPG", "Foto Vacaciones.JPG", "Reporte Final.pdf")
+        val renameSpec = BatchFileRenamer.BatchRenameSpec(
+            template = "{fecha}_{nombre}_{indice}",
+            prefix = "AW_",
+            suffix = "_OK",
+            findText = "Vacaciones",
+            replaceText = "Playa",
+            caseMode = BatchFileRenamer.RenameCaseMode.SNAKE_CASE,
+            startIndex = 1,
+            paddingDigits = 2
+        )
+        val preview = BatchFileRenamer.generatePreview(
+            originalFileNames = originals,
+            spec = renameSpec,
+            fixedDateString = "20261124"
+        )
+        assertEquals(3, preview.size)
+        assertEquals("aw_20261124_foto_playa_01_ok.JPG", preview[0].newFileName)
+        assertEquals("aw_20261124_foto_playa_02_ok.JPG", preview[1].newFileName)
+
+        val dup1 = File.createTempFile("dup_a_", ".bin")
+        val dup2 = File.createTempFile("dup_b_", ".bin")
+        val sameSizeDiff = File.createTempFile("diff_c_", ".bin")
+        val uniqueSize = File.createTempFile("uniq_d_", ".bin")
+        try {
+            val payloadA = "Bloque identico para prueba SHA-256 en streaming".toByteArray(Charsets.UTF_8)
+            val payloadB = "Bloque distinto pero exactamente del mismo peso!".toByteArray(Charsets.UTF_8)
+            assertEquals(payloadA.size, payloadB.size)
+            dup1.writeBytes(payloadA)
+            dup2.writeBytes(payloadA)
+            sameSizeDiff.writeBytes(payloadB)
+            uniqueSize.writeBytes("Corto".toByteArray(Charsets.UTF_8))
+
+            val report = DuplicateFilesDetector.scanFilesForDuplicates(
+                listOf(dup1, dup2, sameSizeDiff, uniqueSize)
+            )
+            assertTrue(report.hasDuplicates)
+            assertEquals(1, report.duplicateGroups.size)
+            assertEquals(1, report.totalRedundantFilesCount)
+            assertEquals(payloadA.size.toLong(), report.totalReclaimableBytes)
+            assertEquals(3, report.deduplicatedList.size)
+        } finally {
+            dup1.delete()
+            dup2.delete()
+            sameSizeDiff.delete()
+            uniqueSize.delete()
+        }
+
+        assertTrue(GitHubUpdaterHelper.compareVersions("0.4", "v0.5") < 0)
+        assertTrue(GitHubUpdaterHelper.compareVersions("0.4", "v0.4.1") < 0)
+        assertEquals(0, GitHubUpdaterHelper.compareVersions("0.4", "v0.4"))
+        assertTrue(GitHubUpdaterHelper.compareVersions("0.4", "v0.3") > 0)
+
+        val sampleReleaseJson = """
+            {
+              "tag_name": "v0.5",
+              "name": "AnyWall: Universal Converter v0.5",
+              "published_at": "2026-11-24T12:00:00Z",
+              "html_url": "https://github.com/ArukuSynthesis/AnyWall/releases/tag/v0.5",
+              "body": "Mejoras de rendimiento y nuevos filtros.",
+              "assets": [
+                {
+                  "name": "AnyWall-v0.5-release.apk",
+                  "size": 18450944,
+                  "browser_download_url": "https://github.com/ArukuSynthesis/AnyWall/releases/download/v0.5/AnyWall-v0.5-release.apk"
+                }
+              ]
+            }
+        """.trimIndent()
+        val parsedRelease = GitHubUpdaterHelper.parseLatestReleaseJson(sampleReleaseJson)
+        assertNotNull(parsedRelease)
+        assertEquals("v0.5", parsedRelease!!.tagName)
+        assertEquals("AnyWall-v0.5-release.apk", parsedRelease.apkFileName)
+        assertEquals(18450944L, parsedRelease.apkSizeBytes)
     }
 }

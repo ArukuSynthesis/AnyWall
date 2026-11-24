@@ -1,5 +1,6 @@
 package com.anywall.converter.data.engines
 
+import android.net.Uri
 import com.anywall.converter.core.ScopedStorageManager
 import com.anywall.converter.core.UriFileResolver
 import com.anywall.converter.domain.engine.FileConverterEngine
@@ -14,6 +15,8 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import org.apache.commons.compress.archivers.sevenz.SevenZArchiveEntry
 import org.apache.commons.compress.archivers.sevenz.SevenZFile
+import org.apache.commons.compress.archivers.sevenz.SevenZMethod
+import org.apache.commons.compress.archivers.sevenz.SevenZOutputFile
 import org.apache.commons.compress.archivers.tar.TarArchiveEntry
 import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
 import org.apache.commons.compress.archivers.tar.TarArchiveOutputStream
@@ -34,23 +37,28 @@ import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.IOException
 import java.io.InputStream
+import java.util.Locale
 import kotlin.coroutines.coroutineContext
 
 /**
- * Entrada individual inspeccionada dentro de un archivo comprimido para `ArchivePreviewDialog` (v0.3).
+ * Entrada individual inspeccionada dentro de un archivo comprimido para `ArchivePreviewDialog` (v0.4).
  */
 data class ArchiveEntryPreview(
     val entryPath: String,
     val sizeBytes: Long,
-    val isDirectory: Boolean
+    val isDirectory: Boolean,
+    val isEncrypted: Boolean = false
 )
 
 /**
- * Motor 4: `ArchiveEngineImpl` (Archivos Comprimidos, Extracción Selectiva y File Splitter/Joiner - v0.3)
- * - Empaquetado en `.zip`, `.tar`, `.tar.gz`, `.tar.xz` o `.tar.bz2` con selector de nivel de compresión
- *   (`FAST`, `BALANCED`, `MAXIMUM`) y preservación opcional de subcarpetas (`relativeFolderPath`).
- * - Inspección previa de entradas (`inspectArchiveEntries`) y extracción selectiva (`selectedArchiveEntries`)
- *   de `.zip`, `.tar`, `.tar.gz`, `.tar.xz`, `.tar.bz2`, `.gz`, `.xz`, `.bz2` y `.7z` con protección anti-Zip-Slip.
+ * Motor 4: `ArchiveEngineImpl` (Archivos Comprimidos, Extracción `.rar`/`.rar5` con `libarchive` BSD-2-Clause,
+ * Re-empaquetado en 1 paso, Cómics `.cbz`/`.cbr` y File Splitter/Joiner - v0.4)
+ * - Lectura, inspección y extracción de `.rar`, `.rar5` y `.cbr` mediante `LibArchiveRarBridge` (`libarchive` NDK),
+ *   incluyendo soporte de contraseñas, archivos multivolumen (`.part1.rar`, `.part2.rar`) y protección anti-Zip-Slip.
+ *   Jamás comprime hacia `.rar` ni `.cbr`.
+ * - Re-empaquetado directo en 1 paso de `.rar` / `.cbr` / `.7z` / `.zip` / `.tar*` hacia `.zip`, `.7z`,
+ *   `.tar.gz`, `.tar.xz`, `.tar.bz2` y `.cbz`.
+ * - Empaquetado nativo en `.zip`, `.7z`, `.tar`, `.tar.gz`, `.tar.xz`, `.tar.bz2` y `.cbz`.
  * - División de archivos grandes en partes `.part001`, `.part002`... + manifiesto `SHA-256` (`FILE_PARTS`)
  *   y reconstrucción verificada (`JOIN_PARTS`).
  */
@@ -61,6 +69,8 @@ class ArchiveEngineImpl(
 
     private val extractableArchiveFormats = setOf(
         SupportedFormat.ZIP,
+        SupportedFormat.RAR,
+        SupportedFormat.SEVEN_Z,
         SupportedFormat.TAR,
         SupportedFormat.TAR_GZ,
         SupportedFormat.TAR_XZ,
@@ -68,11 +78,13 @@ class ArchiveEngineImpl(
         SupportedFormat.GZ,
         SupportedFormat.XZ,
         SupportedFormat.BZ2,
-        SupportedFormat.SEVEN_Z
+        SupportedFormat.CBZ,
+        SupportedFormat.CBR
     )
 
     private val packageOutputFormats = listOf(
         SupportedFormat.ZIP,
+        SupportedFormat.SEVEN_Z,
         SupportedFormat.TAR,
         SupportedFormat.TAR_GZ,
         SupportedFormat.TAR_XZ,
@@ -97,6 +109,19 @@ class ArchiveEngineImpl(
         }
 
         targets.addAll(packageOutputFormats)
+
+        // Si las entradas son imágenes o cómics (.cbr / .cbz) o .rar, permitir empaquetar/convertir a .cbz
+        if (distinct.all {
+                it.category == FormatCategory.IMAGE ||
+                    it == SupportedFormat.CBR ||
+                    it == SupportedFormat.CBZ ||
+                    it == SupportedFormat.RAR ||
+                    it == SupportedFormat.ZIP
+            }
+        ) {
+            targets.add(SupportedFormat.CBZ)
+        }
+
         targets.add(SupportedFormat.FILE_PARTS)
         return targets.toList()
     }
@@ -108,6 +133,9 @@ class ArchiveEngineImpl(
         onProgress: (Float, String) -> Unit
     ): List<ConversionJobResult> = withContext(Dispatchers.IO) {
         require(inputs.isNotEmpty()) { "No se seleccionaron archivos para procesar en ArchiveEngineImpl." }
+        require(targetFormat != SupportedFormat.RAR && targetFormat != SupportedFormat.CBR) {
+            "La compresión hacia formato propietario RAR/CBR no está permitida; utiliza ZIP, 7Z, TAR.XZ o CBZ."
+        }
 
         if (targetFormat == SupportedFormat.JOIN_PARTS) {
             return@withContext joinSplitPartFiles(inputs, options, onProgress)
@@ -121,7 +149,18 @@ class ArchiveEngineImpl(
             return@withContext extractAllArchives(inputs, options, onProgress)
         }
 
-        if (targetFormat in packageOutputFormats) {
+        val allAreExtractableArchives = inputs.all { it.format in extractableArchiveFormats }
+        val shouldRepackInnerContents = allAreExtractableArchives && (
+            inputs.any { it.format in setOf(SupportedFormat.RAR, SupportedFormat.CBR, SupportedFormat.CBZ, SupportedFormat.SEVEN_Z) } ||
+                options.selectedArchiveEntries.isNotEmpty() ||
+                (inputs.size == 1 && inputs.first().format != targetFormat)
+            )
+
+        if ((targetFormat in packageOutputFormats || targetFormat == SupportedFormat.CBZ) && shouldRepackInnerContents) {
+            return@withContext repackArchiveInOneStep(inputs, targetFormat, options, onProgress)
+        }
+
+        if (targetFormat in packageOutputFormats || targetFormat == SupportedFormat.CBZ) {
             return@withContext packageFilesIntoArchive(inputs, targetFormat, options, onProgress)
         }
 
@@ -129,14 +168,45 @@ class ArchiveEngineImpl(
     }
 
     /**
-     * Inspecciona el contenido de un archivo comprimido sin extraerlo a almacenamiento permanente,
-     * permitiendo al usuario previsualizar y elegir qué entradas extraer en `ArchivePreviewDialog`.
+     * Inspecciona el contenido de un archivo comprimido (`.rar`, `.rar5`, `.cbr`, `.cbz`, `.zip`, `.tar*`, `.7z`)
+     * sin extraerlo a almacenamiento permanente, permitiendo previsualizar y elegir qué entradas extraer o re-empaquetar.
      */
-    fun inspectArchiveEntries(item: InputFileItem, maxEntries: Int = 500): List<ArchiveEntryPreview> {
+    fun inspectArchiveEntries(
+        item: InputFileItem,
+        maxEntries: Int = 500,
+        passphrase: String = ""
+    ): List<ArchiveEntryPreview> {
         val list = mutableListOf<ArchiveEntryPreview>()
         try {
             when (item.format) {
-                SupportedFormat.ZIP -> {
+                SupportedFormat.RAR,
+                SupportedFormat.CBR -> {
+                    val tempRar = uriResolver.copyUriToTempFile(item.uri, "inspect_rar_", "rar")
+                    try {
+                        val rarEntries = LibArchiveRarBridge.inspectRarEntries(
+                            volumeFiles = listOf(tempRar),
+                            originalNames = listOf(item.displayName),
+                            passphrase = passphrase,
+                            maxEntries = maxEntries
+                        )
+                        for (re in rarEntries) {
+                            if (!re.isDirectory && list.size < maxEntries) {
+                                list.add(
+                                    ArchiveEntryPreview(
+                                        entryPath = re.entryPath,
+                                        sizeBytes = re.sizeBytes,
+                                        isDirectory = false,
+                                        isEncrypted = re.isEncrypted
+                                    )
+                                )
+                            }
+                        }
+                    } finally {
+                        tempRar.delete()
+                    }
+                }
+                SupportedFormat.ZIP,
+                SupportedFormat.CBZ -> {
                     uriResolver.openInputStream(item.uri).use { raw ->
                         ZipArchiveInputStream(BufferedInputStream(raw, 32 * 1024), "UTF-8", true, true).use { zipIn ->
                             var entry = zipIn.nextEntry
@@ -220,6 +290,232 @@ class ArchiveEngineImpl(
         return list
     }
 
+    /**
+     * Re-empaqueta en 1 paso un archivo `.rar`, `.rar5`, `.cbr`, `.7z`, `.zip` o `.tar*`
+     * extrayendo sus entradas internas (totales o seleccionadas) a un directorio temporal
+     * y comprimiéndolas directamente hacia `.zip`, `.7z`, `.tar.gz`, `.tar.xz`, `.tar.bz2` o `.cbz`.
+     */
+    private suspend fun repackArchiveInOneStep(
+        inputs: List<InputFileItem>,
+        targetFormat: SupportedFormat,
+        options: ConversionOptions,
+        onProgress: (Float, String) -> Unit
+    ): List<ConversionJobResult> {
+        val tempExtractDir = File(uriResolver.getWorkingTempDir(), "repack_${System.currentTimeMillis()}")
+        tempExtractDir.mkdirs()
+
+        try {
+            onProgress(0.05f, "Extrayendo entradas internas para re-empaquetar a ${targetFormat.label}…")
+            val extractedFiles = extractArchivesToTempDirectory(
+                inputs = inputs,
+                tempExtractDir = tempExtractDir,
+                selectedEntries = options.selectedArchiveEntries,
+                passphrase = options.archivePassword.ifBlank { options.vaultPassword }
+            ) { subP, msg ->
+                onProgress((0.05f + subP * 0.45f).coerceIn(0.05f, 0.50f), msg)
+            }
+
+            if (extractedFiles.isEmpty()) {
+                throw IOException("No se encontraron archivos internos extraíbles para re-empaquetar.")
+            }
+
+            val sortedExtracted = if (targetFormat == SupportedFormat.CBZ) {
+                extractedFiles.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.relativeTo(tempExtractDir).path })
+            } else {
+                extractedFiles
+            }
+
+            val innerInputItems = sortedExtracted.map { file ->
+                val relPath = file.relativeTo(tempExtractDir).parent?.replace('\\', '/').orEmpty()
+                val fmt = SupportedFormat.detect(file.name, null) ?: SupportedFormat.TXT
+                InputFileItem(
+                    uri = Uri.fromFile(file),
+                    displayName = file.name,
+                    sizeBytes = file.length(),
+                    mimeType = fmt.mimeType,
+                    format = fmt,
+                    relativeFolderPath = relPath
+                )
+            }
+
+            val firstSource = inputs.first()
+            val cleanOrigBase = firstSource.baseNameWithoutExtension
+                .replace(Regex("\\.part\\d+$", RegexOption.IGNORE_CASE), "")
+            val repackOptions = options.copy(
+                preserveSubfolderStructure = true,
+                customOutputBaseName = options.customOutputBaseName.ifBlank { cleanOrigBase }
+            )
+
+            val packagedResults = packageFilesIntoArchive(
+                inputs = innerInputItems,
+                targetFormat = targetFormat,
+                options = repackOptions,
+                onProgress = { subP, msg ->
+                    onProgress((0.50f + subP * 0.50f).coerceIn(0.50f, 1.0f), msg)
+                }
+            )
+
+            val totalOrigBytes = inputs.sumOf { it.sizeBytes }
+            return packagedResults.map { res ->
+                res.copy(
+                    sourceDisplayName = if (inputs.size == 1) firstSource.displayName else "${firstSource.displayName} (+${inputs.size - 1} volúmenes)",
+                    sourceFormat = firstSource.format,
+                    sourceSizeBytes = totalOrigBytes
+                )
+            }
+        } finally {
+            tempExtractDir.deleteRecursively()
+        }
+    }
+
+    /**
+     * Extrae entradas de archivos comprimidos (`.rar`, `.cbr`, `.zip`, `.cbz`, `.7z`, `.tar*`) directamente
+     * en un directorio temporal en disco (útil para re-empaquetado en 1 paso y conversión `.cbr`/`.cbz` → `PDF`/imágenes).
+     */
+    suspend fun extractArchivesToTempDirectory(
+        inputs: List<InputFileItem>,
+        tempExtractDir: File,
+        selectedEntries: Set<String> = emptySet(),
+        passphrase: String = "",
+        onProgress: (Float, String) -> Unit = { _, _ -> }
+    ): List<File> {
+        if (!tempExtractDir.exists()) tempExtractDir.mkdirs()
+
+        // Si son múltiples volúmenes RAR (.part1.rar, .part2.rar), procesarlos en conjunto con libarchive
+        if (inputs.all { it.format == SupportedFormat.RAR || it.format == SupportedFormat.CBR }) {
+            val tempVolumes = mutableListOf<File>()
+            try {
+                inputs.forEachIndexed { idx, item ->
+                    coroutineContext.ensureActive()
+                    onProgress(
+                        (idx.toFloat() / inputs.size.toFloat()) * 0.4f,
+                        "Preparando volumen RAR ${idx + 1}/${inputs.size}: ${item.displayName}"
+                    )
+                    val tempVol = uriResolver.copyUriToTempFile(item.uri, "rar_vol_${idx}_", "rar")
+                    tempVolumes.add(tempVol)
+                }
+                onProgress(0.45f, "Extrayendo con libarchive (${LibArchiveRarBridge.getEngineVersionLabel()})…")
+                return LibArchiveRarBridge.extractRarArchive(
+                    volumeFiles = tempVolumes,
+                    outputDir = tempExtractDir,
+                    originalNames = inputs.map { it.displayName },
+                    selectedEntries = selectedEntries,
+                    passphrase = passphrase
+                )
+            } finally {
+                tempVolumes.forEach { it.delete() }
+            }
+        }
+
+        val collectedFiles = mutableListOf<File>()
+        inputs.forEachIndexed { idx, item ->
+            coroutineContext.ensureActive()
+            onProgress(idx.toFloat() / inputs.size.toFloat(), "Extrayendo ${item.displayName}…")
+            when (item.format) {
+                SupportedFormat.RAR,
+                SupportedFormat.CBR -> {
+                    val tempRar = uriResolver.copyUriToTempFile(item.uri, "rar_single_", "rar")
+                    try {
+                        val extracted = LibArchiveRarBridge.extractRarArchive(
+                            volumeFiles = listOf(tempRar),
+                            outputDir = tempExtractDir,
+                            originalNames = listOf(item.displayName),
+                            selectedEntries = selectedEntries,
+                            passphrase = passphrase
+                        )
+                        collectedFiles.addAll(extracted)
+                    } finally {
+                        tempRar.delete()
+                    }
+                }
+                SupportedFormat.ZIP,
+                SupportedFormat.CBZ -> {
+                    uriResolver.openInputStream(item.uri).use { raw ->
+                        ZipArchiveInputStream(BufferedInputStream(raw, 64 * 1024), "UTF-8", true, true).use { zipIn ->
+                            var entry = zipIn.nextEntry
+                            while (entry != null) {
+                                coroutineContext.ensureActive()
+                                if (!entry.isDirectory && shouldExtractEntry(entry.name, selectedEntries)) {
+                                    val dest = LibArchiveRarBridge.resolveSafeDestinationFile(tempExtractDir, entry.name)
+                                    dest.parentFile?.mkdirs()
+                                    FileOutputStream(dest).use { fos ->
+                                        zipIn.copyTo(fos, 64 * 1024)
+                                    }
+                                    collectedFiles.add(dest)
+                                }
+                                entry = zipIn.nextEntry
+                            }
+                        }
+                    }
+                }
+                SupportedFormat.SEVEN_Z -> {
+                    val temp7z = uriResolver.copyUriToTempFile(item.uri, "repack_7z_", "7z")
+                    try {
+                        SevenZFile.builder().setFile(temp7z).get().use { sevenZ ->
+                            val buf = ByteArray(64 * 1024)
+                            var entry = sevenZ.nextEntry
+                            while (entry != null) {
+                                coroutineContext.ensureActive()
+                                val name = entry.name ?: "entry"
+                                if (!entry.isDirectory && shouldExtractEntry(name, selectedEntries)) {
+                                    val dest = LibArchiveRarBridge.resolveSafeDestinationFile(tempExtractDir, name)
+                                    dest.parentFile?.mkdirs()
+                                    FileOutputStream(dest).use { fos ->
+                                        while (true) {
+                                            val r = sevenZ.read(buf, 0, buf.size)
+                                            if (r <= 0) break
+                                            fos.write(buf, 0, r)
+                                        }
+                                    }
+                                    collectedFiles.add(dest)
+                                } else if (!entry.isDirectory) {
+                                    while (sevenZ.read(buf, 0, buf.size) > 0) {
+                                        coroutineContext.ensureActive()
+                                    }
+                                }
+                                entry = sevenZ.nextEntry
+                            }
+                        }
+                    } finally {
+                        temp7z.delete()
+                    }
+                }
+                SupportedFormat.TAR,
+                SupportedFormat.TAR_GZ,
+                SupportedFormat.TAR_XZ,
+                SupportedFormat.TAR_BZ2 -> {
+                    val comp = when (item.format) {
+                        SupportedFormat.TAR_GZ -> TarCompression.GZIP
+                        SupportedFormat.TAR_XZ -> TarCompression.XZ
+                        SupportedFormat.TAR_BZ2 -> TarCompression.BZIP2
+                        else -> TarCompression.NONE
+                    }
+                    uriResolver.openInputStream(item.uri).use { raw ->
+                        wrapWithDecompressor(BufferedInputStream(raw, 64 * 1024), comp).use { dec ->
+                            TarArchiveInputStream(dec, "UTF-8").use { tarIn ->
+                                var entry = tarIn.nextEntry
+                                while (entry != null) {
+                                    coroutineContext.ensureActive()
+                                    if (!entry.isDirectory && shouldExtractEntry(entry.name, selectedEntries)) {
+                                        val dest = LibArchiveRarBridge.resolveSafeDestinationFile(tempExtractDir, entry.name)
+                                        dest.parentFile?.mkdirs()
+                                        FileOutputStream(dest).use { fos ->
+                                            tarIn.copyTo(fos, 64 * 1024)
+                                        }
+                                        collectedFiles.add(dest)
+                                    }
+                                    entry = tarIn.nextEntry
+                                }
+                            }
+                        }
+                    }
+                }
+                else -> {}
+            }
+        }
+        return collectedFiles
+    }
+
     private suspend fun splitInputFilesIntoParts(
         inputs: List<InputFileItem>,
         options: ConversionOptions,
@@ -270,7 +566,6 @@ class ArchiveEngineImpl(
                     )
                 }
 
-                // Guardar también el manifiesto SHA-256 verificable
                 val savedManifest = storageManager.saveTempFileToDownloads(
                     sourceFile = splitRes.manifestFile,
                     desiredDisplayName = splitRes.manifestFile.name,
@@ -417,7 +712,8 @@ class ArchiveEngineImpl(
 
         try {
             when (targetFormat) {
-                SupportedFormat.ZIP -> {
+                SupportedFormat.ZIP,
+                SupportedFormat.CBZ -> {
                     FileOutputStream(tempArchiveFile).use { fos ->
                         BufferedOutputStream(fos, 64 * 1024).use { bos ->
                             ZipArchiveOutputStream(bos).use { zipOut ->
@@ -429,7 +725,7 @@ class ArchiveEngineImpl(
                                     val p = index.toFloat() / inputs.size.toFloat()
                                     onProgress(
                                         p,
-                                        "Empaquetando en ZIP (${index + 1}/${inputs.size}): ${item.displayName}"
+                                        "Empaquetando en ${targetFormat.label} (${index + 1}/${inputs.size}): ${item.displayName}"
                                     )
 
                                     val entryName = uniqueEntryName(item)
@@ -448,6 +744,43 @@ class ArchiveEngineImpl(
                                 zipOut.finish()
                             }
                         }
+                    }
+                }
+
+                SupportedFormat.SEVEN_Z -> {
+                    SevenZOutputFile(tempArchiveFile).use { sevenZOut ->
+                        val method = if (compLevel == com.anywall.converter.domain.model.ArchiveCompressionLevel.FAST) {
+                            SevenZMethod.DEFLATE
+                        } else {
+                            SevenZMethod.LZMA2
+                        }
+                        sevenZOut.setContentCompression(method)
+                        val buf = ByteArray(64 * 1024)
+
+                        inputs.forEachIndexed { index, item ->
+                            coroutineContext.ensureActive()
+                            val p = index.toFloat() / inputs.size.toFloat()
+                            onProgress(
+                                p,
+                                "Empaquetando en 7Z (${index + 1}/${inputs.size}): ${item.displayName}"
+                            )
+                            val entryName = uniqueEntryName(item)
+                            val entry = SevenZArchiveEntry().apply {
+                                name = entryName
+                                isDirectory = false
+                                lastModifiedDate = java.util.Date(System.currentTimeMillis())
+                            }
+                            sevenZOut.putArchiveEntry(entry)
+                            uriResolver.openInputStream(item.uri).use { inputStream ->
+                                while (true) {
+                                    val r = inputStream.read(buf)
+                                    if (r <= 0) break
+                                    sevenZOut.write(buf, 0, r)
+                                }
+                            }
+                            sevenZOut.closeArchiveEntry()
+                        }
+                        sevenZOut.finish()
                     }
                 }
 
@@ -558,7 +891,7 @@ class ArchiveEngineImpl(
                     sourceSizeBytes = totalSourceBytes,
                     outputDisplayName = saved.displayName,
                     outputFormat = targetFormat,
-                    outputCategory = FormatCategory.ARCHIVE,
+                    outputCategory = targetFormat.category,
                     outputUri = saved.uri,
                     outputAbsolutePath = saved.absolutePath,
                     outputSizeBytes = saved.sizeBytes,
@@ -607,9 +940,16 @@ class ArchiveEngineImpl(
         options: ConversionOptions,
         onProgress: (Float, String) -> Unit
     ): List<ConversionJobResult> {
+        val selectedEntries = options.selectedArchiveEntries
+        val passphrase = options.archivePassword.ifBlank { options.vaultPassword }
+
+        // Caso especial: Múltiples volúmenes RAR (.part1.rar, .part2.rar...) cargados juntos en el lote
+        if (inputs.size > 1 && inputs.all { it.format == SupportedFormat.RAR }) {
+            return extractMultiVolumeRarBatch(inputs, options, selectedEntries, passphrase, onProgress)
+        }
+
         val allResults = mutableListOf<ConversionJobResult>()
         val totalArchives = inputs.size
-        val selectedEntries = options.selectedArchiveEntries
 
         inputs.forEachIndexed { archiveIdx, item ->
             coroutineContext.ensureActive()
@@ -619,13 +959,25 @@ class ArchiveEngineImpl(
             val subFolderName = if (options.customOutputBaseName.isNotBlank() && totalArchives == 1) {
                 UriFileResolver.sanitizeFileName(options.customOutputBaseName)
             } else {
-                UriFileResolver.sanitizeFileName(item.baseNameWithoutExtension)
+                UriFileResolver.sanitizeFileName(
+                    item.baseNameWithoutExtension.replace(Regex("\\.part\\d+$", RegexOption.IGNORE_CASE), "")
+                )
             }.ifBlank { "extraido_${System.currentTimeMillis() % 10000}" }
 
             onProgress(baseProgress, "Extrayendo ${item.displayName} en Downloads/AnyWall/$subFolderName/…")
 
             val extractedForArchive = when (item.format) {
-                SupportedFormat.ZIP -> extractZipArchive(item, subFolderName, selectedEntries) { subP, msg ->
+                SupportedFormat.RAR,
+                SupportedFormat.CBR -> extractSingleOrMultiRarArchive(
+                    items = listOf(item),
+                    rootSubFolder = subFolderName,
+                    selectedEntries = selectedEntries,
+                    passphrase = passphrase
+                ) { subP, msg ->
+                    onProgress((baseProgress + subP * slice).coerceIn(0f, 0.99f), msg)
+                }
+                SupportedFormat.ZIP,
+                SupportedFormat.CBZ -> extractZipArchive(item, subFolderName, selectedEntries) { subP, msg ->
                     onProgress((baseProgress + subP * slice).coerceIn(0f, 0.99f), msg)
                 }
                 SupportedFormat.TAR -> extractTarArchive(item, subFolderName, TarCompression.NONE, selectedEntries) { subP, msg ->
@@ -680,6 +1032,110 @@ class ArchiveEngineImpl(
         return allResults
     }
 
+    private suspend fun extractMultiVolumeRarBatch(
+        inputs: List<InputFileItem>,
+        options: ConversionOptions,
+        selectedEntries: Set<String>,
+        passphrase: String,
+        onProgress: (Float, String) -> Unit
+    ): List<ConversionJobResult> {
+        val first = inputs.first()
+        val cleanBase = first.baseNameWithoutExtension.replace(Regex("\\.part\\d+$", RegexOption.IGNORE_CASE), "")
+        val subFolderName = if (options.customOutputBaseName.isNotBlank()) {
+            UriFileResolver.sanitizeFileName(options.customOutputBaseName)
+        } else {
+            UriFileResolver.sanitizeFileName(cleanBase)
+        }.ifBlank { "rar_extraido" }
+
+        return extractSingleOrMultiRarArchive(
+            items = inputs,
+            rootSubFolder = subFolderName,
+            selectedEntries = selectedEntries,
+            passphrase = passphrase,
+            onSubProgress = onProgress
+        )
+    }
+
+    private suspend fun extractSingleOrMultiRarArchive(
+        items: List<InputFileItem>,
+        rootSubFolder: String,
+        selectedEntries: Set<String>,
+        passphrase: String,
+        onSubProgress: (Float, String) -> Unit
+    ): List<ConversionJobResult> {
+        val tempVolumes = mutableListOf<File>()
+        val tempOutDir = File(uriResolver.getWorkingTempDir(), "rar_ext_${System.currentTimeMillis()}")
+        tempOutDir.mkdirs()
+
+        try {
+            items.forEachIndexed { idx, item ->
+                coroutineContext.ensureActive()
+                onSubProgress(
+                    (idx.toFloat() / items.size.toFloat()) * 0.35f,
+                    "Preparando volumen RAR (${idx + 1}/${items.size}): ${item.displayName}"
+                )
+                val tempVol = uriResolver.copyUriToTempFile(item.uri, "rar_vol_${idx}_", "rar")
+                tempVolumes.add(tempVol)
+            }
+
+            onSubProgress(0.45f, "Extrayendo entradas RAR con ${LibArchiveRarBridge.getEngineVersionLabel()}…")
+            val extractedFiles = LibArchiveRarBridge.extractRarArchive(
+                volumeFiles = tempVolumes,
+                outputDir = tempOutDir,
+                originalNames = items.map { it.displayName },
+                selectedEntries = selectedEntries,
+                passphrase = passphrase
+            )
+
+            val results = mutableListOf<ConversionJobResult>()
+            val totalFiles = extractedFiles.size.coerceAtLeast(1)
+            val firstSource = items.first()
+            val approxSourceBytes = (items.sumOf { it.sizeBytes } / totalFiles).coerceAtLeast(1L)
+
+            extractedFiles.forEachIndexed { idx, file ->
+                coroutineContext.ensureActive()
+                val relPath = file.relativeTo(tempOutDir).path.replace('\\', '/')
+                val (nestedSubFolder, cleanFileName) = splitEntryFolderAndName(rootSubFolder, relPath)
+                val detectedFormat = SupportedFormat.detect(cleanFileName, null) ?: SupportedFormat.TXT
+
+                onSubProgress(
+                    0.50f + (idx.toFloat() / totalFiles.toFloat()) * 0.48f,
+                    "Guardando ($idx/$totalFiles): $cleanFileName"
+                )
+
+                val saved = storageManager.saveTempFileToDownloads(
+                    sourceFile = file,
+                    desiredDisplayName = cleanFileName,
+                    mimeType = detectedFormat.mimeType,
+                    subFolder = nestedSubFolder
+                )
+
+                results.add(
+                    ConversionJobResult(
+                        sourceDisplayName = if (items.size == 1) firstSource.displayName else "${firstSource.displayName} (+${items.size - 1} volúmenes)",
+                        sourceFormat = firstSource.format,
+                        sourceSizeBytes = approxSourceBytes,
+                        outputDisplayName = saved.displayName,
+                        outputFormat = detectedFormat,
+                        outputCategory = FormatCategory.ARCHIVE,
+                        outputUri = saved.uri,
+                        outputAbsolutePath = saved.absolutePath,
+                        outputSizeBytes = saved.sizeBytes,
+                        outputMimeType = saved.mimeType
+                    )
+                )
+            }
+
+            if (results.isEmpty()) {
+                throw IOException("El archivo RAR '${firstSource.displayName}' no contiene archivos extraíbles seleccionados.")
+            }
+            return results
+        } finally {
+            tempVolumes.forEach { it.delete() }
+            tempOutDir.deleteRecursively()
+        }
+    }
+
     private enum class TarCompression {
         NONE, GZIP, XZ, BZIP2
     }
@@ -695,7 +1151,8 @@ class ArchiveEngineImpl(
 
     private fun shouldExtractEntry(entryName: String, selectedEntries: Set<String>): Boolean {
         if (selectedEntries.isEmpty()) return true
-        return entryName in selectedEntries
+        val sanitized = LibArchiveRarBridge.sanitizeRarEntryPath(entryName)
+        return entryName in selectedEntries || sanitized in selectedEntries
     }
 
     private suspend fun extractZipArchive(
@@ -734,7 +1191,7 @@ class ArchiveEngineImpl(
         }
 
         if (results.isEmpty()) {
-            throw IOException("El archivo ZIP '${item.displayName}' no contiene archivos extraíbles seleccionados.")
+            throw IOException("El archivo '${item.displayName}' no contiene archivos extraíbles seleccionados.")
         }
         return results
     }
@@ -904,7 +1361,6 @@ class ArchiveEngineImpl(
                             tempEntryFile.delete()
                         }
                     } else if (!entry.isDirectory) {
-                        // Drenar entrada omitida para avanzar puntero de SevenZFile
                         while (sevenZFile.read(buffer, 0, buffer.size) > 0) {
                             coroutineContext.ensureActive()
                         }

@@ -79,6 +79,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.anywall.converter.core.ScopedStorageManager
 import com.anywall.converter.core.UriFileResolver
+import com.anywall.converter.data.engines.DuplicateFilesDetector
 import com.anywall.converter.data.engines.ForensicMetadataHelper
 import com.anywall.converter.data.engines.ImageVisualTransformHelper
 import com.anywall.converter.data.engines.LineDiffEngine
@@ -94,11 +95,12 @@ import kotlin.math.max
 import kotlin.math.roundToInt
 
 /**
- * Suite de Herramientas Técnicas y de Privacidad 100% Offline (`OfflineToolsSheetDialog` - v0.3):
+ * Suite de Herramientas Técnicas (`OfflineToolsSheetDialog` - v0.4):
  * 1. Inspector Forense de Metadatos (EXIF/GPS, PDF, Multimedia) y Verificador de Hashes `SHA-256` / `MD5`.
- * 2. Generador y Escáner de Códigos QR Offline (`PNG`, `SVG` vectorial y decodificación desde imagen).
- * 3. Comparador Local de Diferencias Línea por Línea (`LineDiffEngine` LCS) con exportación `.diff.txt`.
+ * 2. Generador y Escáner de Códigos QR (`PNG`, `SVG` vectorial y decodificación desde imagen).
+ * 3. Comparador de Diferencias Línea por Línea (`LineDiffEngine` LCS) con exportación `.diff.txt`.
  * 4. Comparador Visual «Antes / Después» con cortina deslizable interactiva y cálculo de ahorro en vivo.
+ * 5. Detector y Limpiador de Duplicados en 2 fases (tamaño exacto + `SHA-256` en streaming).
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -110,14 +112,16 @@ fun OfflineToolsSheetDialog(
     uriResolver: UriFileResolver,
     storageManager: ScopedStorageManager,
     forensicHelper: ForensicMetadataHelper,
+    onDeduplicateQueue: ((List<InputFileItem>) -> Unit)? = null,
     onDismiss: () -> Unit
 ) {
-    var selectedTab by remember { mutableIntStateOf(initialTabIndex.coerceIn(0, 3)) }
+    var selectedTab by remember { mutableIntStateOf(initialTabIndex.coerceIn(0, 4)) }
     val tabTitles = listOf(
         "Metadatos & SHA-256",
-        "Códigos QR Offline",
+        "Códigos QR",
         "Comparador Diff",
-        "Antes / Después"
+        "Antes / Después",
+        "Duplicados SHA-256"
     )
 
     Dialog(
@@ -135,12 +139,12 @@ fun OfflineToolsSheetDialog(
                             title = {
                                 Column {
                                     Text(
-                                        text = "Herramientas Offline • AnyWall v0.3",
+                                        text = "Herramientas • AnyWall v0.4",
                                         style = MaterialTheme.typography.titleMedium,
                                         fontWeight = FontWeight.Bold
                                     )
                                     Text(
-                                        text = "100% Local • Sin red • SynthesizerEnd",
+                                        text = "SynthesizerEnd • Universal Converter",
                                         style = MaterialTheme.typography.labelSmall,
                                         color = MaterialTheme.colorScheme.primary
                                     )
@@ -192,6 +196,11 @@ fun OfflineToolsSheetDialog(
                             imageEditSpec = currentImageEditSpec,
                             qualityPercent = currentQualityPercent,
                             uriResolver = uriResolver
+                        )
+                        4 -> DuplicateFilesDetectorTab(
+                            loadedInputs = loadedInputs,
+                            uriResolver = uriResolver,
+                            onDeduplicateQueue = onDeduplicateQueue
                         )
                     }
                 }
@@ -467,7 +476,7 @@ private fun OfflineQrToolTab(
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Text(
-                    text = "Generador de Código QR 100% Offline",
+                    text = "Generador de Código QR",
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.Bold
                 )
@@ -878,3 +887,195 @@ private fun BeforeAfterComparisonTab(
         }
     }
 }
+
+@Composable
+private fun DuplicateFilesDetectorTab(
+    loadedInputs: List<InputFileItem>,
+    uriResolver: UriFileResolver,
+    onDeduplicateQueue: ((List<InputFileItem>) -> Unit)?
+) {
+    val scope = rememberCoroutineScope()
+    var scanCandidates by remember(loadedInputs) { mutableStateOf(loadedInputs) }
+    var scanReport by remember { mutableStateOf<DuplicateFilesDetector.DuplicateScanReport<InputFileItem>?>(null) }
+    var isScanning by remember { mutableStateOf(false) }
+    var statusBanner by remember { mutableStateOf<String?>(null) }
+
+    val multiFilePicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenMultipleDocuments()
+    ) { uris ->
+        if (uris.isNotEmpty()) {
+            val resolved = uriResolver.resolveMultipleFiles(uris)
+            scanCandidates = scanCandidates + resolved
+        }
+    }
+
+    LaunchedEffect(scanCandidates) {
+        if (scanCandidates.isEmpty()) {
+            scanReport = null
+            return@LaunchedEffect
+        }
+        isScanning = true
+        val report = withContext(Dispatchers.IO) {
+            DuplicateFilesDetector.scanInputItemsForDuplicates(
+                items = scanCandidates,
+                uriResolver = uriResolver
+            )
+        }
+        scanReport = report
+        isScanning = false
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Detector y Limpiador de Duplicados (SHA-256)",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = "Agrupa por tamaño exacto en bytes y calcula hash SHA-256 en streaming solo cuando hay coincidencia.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Spacer(modifier = Modifier.width(8.dp))
+            FilledTonalButton(onClick = { multiFilePicker.launch(arrayOf("*/*")) }) {
+                Icon(Icons.Filled.FileOpen, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("+ Archivos")
+            }
+        }
+
+        if (isScanning) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(32.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    CircularProgressIndicator()
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text("Analizando tamaños y calculando SHA-256 en streaming…")
+                }
+            }
+        } else {
+            val report = scanReport
+            if (report == null || report.totalScannedCount == 0) {
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Text(
+                        text = "Carga varios archivos en la cola o pulsa «+ Archivos» para detectar copias idénticas por tamaño y hash criptográfico SHA-256.",
+                        modifier = Modifier.padding(16.dp),
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
+            } else {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = if (report.hasDuplicates) {
+                            MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.45f)
+                        } else {
+                            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
+                        }
+                    )
+                ) {
+                    Column(
+                        modifier = Modifier.padding(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            text = if (report.hasDuplicates) {
+                                "Se detectaron ${report.totalRedundantFilesCount} duplicados exactos en ${report.duplicateGroups.size} grupos"
+                            } else {
+                                "✓ 0 duplicados en ${report.totalScannedCount} archivos analizados"
+                            },
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold
+                        )
+                        if (report.hasDuplicates) {
+                            Text(
+                                text = "Espacio redundante recuperable: ${InputFileItem.formatBytes(report.totalReclaimableBytes)}",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.primary,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            if (onDeduplicateQueue != null) {
+                                Button(
+                                    onClick = {
+                                        onDeduplicateQueue(report.deduplicatedList)
+                                        scanCandidates = report.deduplicatedList
+                                        statusBanner = "Se limpiaron ${report.totalRedundantFilesCount} archivos duplicados de la cola."
+                                    }
+                                ) {
+                                    Text("Limpiar duplicados de la cola en 1 toque")
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if (statusBanner != null) {
+                    Text(
+                        text = statusBanner.orEmpty(),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+
+                report.duplicateGroups.forEachIndexed { idx, group ->
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(14.dp)
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Text(
+                                text = "Grupo #${idx + 1} • ${group.items.size} copias (${InputFileItem.formatBytes(group.fileSizeBytes)} c/u)",
+                                style = MaterialTheme.typography.labelLarge,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = "SHA-256: ${group.sha256Hex}",
+                                style = MaterialTheme.typography.bodySmall,
+                                fontFamily = FontFamily.Monospace,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            HorizontalDivider()
+                            group.items.forEachIndexed { copyIdx, item ->
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = if (copyIdx == 0) "★ Conservar: ${item.displayName}" else "• Duplicado: ${item.displayName}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        fontWeight = if (copyIdx == 0) FontWeight.Bold else FontWeight.Normal,
+                                        color = if (copyIdx == 0) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+

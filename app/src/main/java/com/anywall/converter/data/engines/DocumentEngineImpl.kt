@@ -20,6 +20,8 @@ import com.anywall.converter.domain.model.InputFileItem
 import com.anywall.converter.domain.model.NormalizedRedactionBox
 import com.anywall.converter.domain.model.OutputNamingTemplateResolver
 import com.anywall.converter.domain.model.PdfActionMode
+import com.anywall.converter.domain.model.PdfAnnotationType
+import com.anywall.converter.domain.model.PdfPageAnnotation
 import com.anywall.converter.domain.model.PdfPageEditItem
 import com.anywall.converter.domain.model.SupportedFormat
 import com.caverock.androidsvg.SVG
@@ -230,28 +232,51 @@ class DocumentEngineImpl(
                             targetDoc.addPage(blank)
                             blank
                         } else {
-                            val sourceDoc = loadedDocs[edit.sourceUriString]?.second
-                                ?: loadedDocs.values.firstOrNull()?.second
+                            val sourcePair = loadedDocs[edit.sourceUriString]
+                                ?: loadedDocs.values.firstOrNull()
                                 ?: throw IOException("No se pudo acceder al PDF de origen: ${edit.sourceDisplayName}")
+                            val sourceFile = sourcePair.first
+                            val sourceDoc = sourcePair.second
 
                             if (edit.originalPageIndex in 0 until sourceDoc.numberOfPages) {
-                                val importedPage = targetDoc.importPage(sourceDoc.getPage(edit.originalPageIndex))
-                                if (edit.normalizedRotation != 0) {
-                                    val currentRot = importedPage.rotation
-                                    importedPage.rotation = (currentRot + edit.normalizedRotation) % 360
+                                if (edit.perspectiveQuad.isModified) {
+                                    createPerspectiveRectifiedPdfPage(
+                                        targetDoc = targetDoc,
+                                        sourceFile = sourceFile,
+                                        pageIndex = edit.originalPageIndex,
+                                        rotationDegrees = edit.normalizedRotation,
+                                        quad = edit.perspectiveQuad,
+                                        qualityPercent = options.clampedQuality
+                                    )
+                                } else {
+                                    val importedPage = targetDoc.importPage(sourceDoc.getPage(edit.originalPageIndex))
+                                    if (edit.normalizedRotation != 0) {
+                                        val currentRot = importedPage.rotation
+                                        importedPage.rotation = (currentRot + edit.normalizedRotation) % 360
+                                    }
+                                    importedPage
                                 }
-                                importedPage
                             } else {
                                 null
                             }
                         }
 
                         if (targetPage != null) {
+                            if (edit.annotations.isNotEmpty()) {
+                                stampPageAnnotations(targetDoc, targetPage, edit.annotations)
+                            }
                             if (edit.redactionBoxes.isNotEmpty()) {
                                 stampPageRedactionBoxes(targetDoc, targetPage, edit.redactionBoxes)
                             }
                             if (edit.hasSignatureStamp && signatureBitmap != null) {
-                                stampSignatureOnPage(targetDoc, targetPage, signatureBitmap)
+                                stampSignatureOnPage(
+                                    doc = targetDoc,
+                                    page = targetPage,
+                                    signatureBitmap = signatureBitmap,
+                                    sigXNorm = edit.signatureXNorm,
+                                    sigYNorm = edit.signatureYNorm,
+                                    sigWidthNorm = edit.signatureWidthNorm
+                                )
                             }
                         }
                     }
@@ -346,6 +371,131 @@ class DocumentEngineImpl(
         }
     }
 
+    private fun createPerspectiveRectifiedPdfPage(
+        targetDoc: PDDocument,
+        sourceFile: File,
+        pageIndex: Int,
+        rotationDegrees: Int,
+        quad: com.anywall.converter.domain.model.PerspectiveQuadSpec,
+        qualityPercent: Int
+    ): PDPage {
+        ParcelFileDescriptor.open(sourceFile, ParcelFileDescriptor.MODE_READ_ONLY).use { pfd ->
+            PdfRenderer(pfd).use { renderer ->
+                renderer.openPage(pageIndex).use { srcPage ->
+                    val renderW = (srcPage.width * 2).coerceIn(600, 2400)
+                    val renderH = (srcPage.height * 2).coerceIn(600, 2400)
+                    val rawBmp = Bitmap.createBitmap(renderW, renderH, Bitmap.Config.ARGB_8888)
+                    val canvas = Canvas(rawBmp)
+                    canvas.drawColor(Color.WHITE)
+                    srcPage.render(rawBmp, Rect(0, 0, renderW, renderH), null, PdfRenderer.Page.RENDER_MODE_FOR_PRINT)
+
+                    val rotatedBmp = if (rotationDegrees != 0) {
+                        val m = Matrix().apply { postRotate(rotationDegrees.toFloat()) }
+                        Bitmap.createBitmap(rawBmp, 0, 0, rawBmp.width, rawBmp.height, m, true).also {
+                            if (it !== rawBmp) rawBmp.recycle()
+                        }
+                    } else {
+                        rawBmp
+                    }
+
+                    val warpedBmp = ImageVisualTransformHelper.applyPerspectiveQuad(rotatedBmp, quad)
+                    if (warpedBmp !== rotatedBmp) rotatedBmp.recycle()
+
+                    try {
+                        val pageRect = PDRectangle(PDRectangle.A4.width, PDRectangle.A4.height)
+                        val newPage = PDPage(pageRect)
+                        targetDoc.addPage(newPage)
+                        val pdImg = JPEGFactory.createFromImage(
+                            targetDoc,
+                            warpedBmp,
+                            (qualityPercent / 100f).coerceIn(0.5f, 0.95f)
+                        )
+                        PDPageContentStream(targetDoc, newPage).use { cs ->
+                            cs.drawImage(pdImg, 0f, 0f, pageRect.width, pageRect.height)
+                        }
+                        return newPage
+                    } finally {
+                        warpedBmp.recycle()
+                    }
+                }
+            }
+        }
+    }
+
+    private fun stampPageAnnotations(
+        doc: PDDocument,
+        page: PDPage,
+        annotations: List<PdfPageAnnotation>
+    ) {
+        if (annotations.isEmpty()) return
+        val box = page.cropBox ?: page.mediaBox ?: PDRectangle.A4
+        val pageW = box.width
+        val pageH = box.height
+
+        PDPageContentStream(doc, page, PDPageContentStream.AppendMode.APPEND, true, true).use { cs ->
+            for (ann in annotations) {
+                val r = ((ann.colorArgb shr 16) and 0xFF) / 255f
+                val g = ((ann.colorArgb shr 8) and 0xFF) / 255f
+                val b = (ann.colorArgb and 0xFF) / 255f
+
+                when (ann.type) {
+                    PdfAnnotationType.HIGHLIGHTER -> {
+                        val gsHighlight = PDExtendedGraphicsState().apply {
+                            nonStrokingAlphaConstant = 0.38f
+                        }
+                        cs.setGraphicsStateParameters(gsHighlight)
+                        cs.setNonStrokingColor(r, g, b)
+
+                        val left = minOf(ann.xNorm, ann.endXNorm).coerceIn(0f, 1f)
+                        val right = maxOf(ann.xNorm, ann.endXNorm).coerceIn(left + 0.02f, 1f)
+                        val top = minOf(ann.yNorm, ann.endYNorm).coerceIn(0f, 1f)
+                        val bottom = maxOf(ann.yNorm, ann.endYNorm).coerceIn(top + 0.015f, 1f)
+
+                        val x = box.lowerLeftX + left * pageW
+                        val w = ((right - left) * pageW).coerceAtLeast(8f)
+                        val yTopFromBottom = (1f - top) * pageH
+                        val yBottomFromBottom = (1f - bottom) * pageH
+                        val y = box.lowerLeftY + yBottomFromBottom
+                        val h = (yTopFromBottom - yBottomFromBottom).coerceAtLeast(8f)
+                        cs.addRect(x, y, w, h)
+                        cs.fill()
+                    }
+
+                    PdfAnnotationType.TEXT,
+                    PdfAnnotationType.DATE_STAMP -> {
+                        val cleanText = sanitizePdfWinAnsiText(ann.text.trim())
+                        if (cleanText.isNotEmpty()) {
+                            val gsOpaque = PDExtendedGraphicsState().apply {
+                                nonStrokingAlphaConstant = 0.95f
+                            }
+                            cs.setGraphicsStateParameters(gsOpaque)
+                            val x = box.lowerLeftX + (ann.xNorm.coerceIn(0.02f, 0.92f) * pageW)
+                            val y = box.lowerLeftY + ((1f - ann.yNorm.coerceIn(0.04f, 0.96f)) * pageH)
+                            val fontSize = ann.fontSizePt.coerceIn(9f, 36f)
+
+                            if (ann.type == PdfAnnotationType.DATE_STAMP) {
+                                val pad = 4f
+                                val approxW = cleanText.length * fontSize * 0.56f + pad * 2
+                                val approxH = fontSize + pad * 2
+                                cs.setStrokingColor(r, g, b)
+                                cs.setLineWidth(1.4f)
+                                cs.addRect(x - pad, y - pad, approxW, approxH)
+                                cs.stroke()
+                            }
+
+                            cs.setNonStrokingColor(r, g, b)
+                            cs.beginText()
+                            cs.setFont(PDType1Font.HELVETICA_BOLD, fontSize)
+                            cs.newLineAtOffset(x, y)
+                            cs.showText(cleanText)
+                            cs.endText()
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     private fun stampPageRedactionBoxes(
         doc: PDDocument,
         page: PDPage,
@@ -357,11 +507,14 @@ class DocumentEngineImpl(
         val pageH = box.height
 
         PDPageContentStream(doc, page, PDPageContentStream.AppendMode.APPEND, true, true).use { cs ->
+            val gsOpaque = PDExtendedGraphicsState().apply {
+                nonStrokingAlphaConstant = 1.0f
+            }
+            cs.setGraphicsStateParameters(gsOpaque)
             cs.setNonStrokingColor(0f, 0f, 0f)
             for (r in boxes) {
                 val x = box.lowerLeftX + (r.clampedLeft * pageW)
                 val w = ((r.clampedRight - r.clampedLeft) * pageW).coerceAtLeast(2f)
-                // Coordenadas PDF crecen de abajo hacia arriba
                 val yTopFromBottom = (1f - r.clampedTop) * pageH
                 val yBottomFromBottom = (1f - r.clampedBottom) * pageH
                 val y = box.lowerLeftY + yBottomFromBottom
@@ -375,17 +528,23 @@ class DocumentEngineImpl(
     private fun stampSignatureOnPage(
         doc: PDDocument,
         page: PDPage,
-        signatureBitmap: Bitmap
+        signatureBitmap: Bitmap,
+        sigXNorm: Float = 0.65f,
+        sigYNorm: Float = 0.82f,
+        sigWidthNorm: Float = 0.26f
     ) {
         val box = page.cropBox ?: page.mediaBox ?: PDRectangle.A4
         val pageW = box.width
         val pageH = box.height
         val sigImg = LosslessFactory.createFromImage(doc, signatureBitmap)
-        val targetW = (pageW * 0.24f).coerceIn(72f, 180f)
+        val targetW = (pageW * sigWidthNorm.coerceIn(0.08f, 0.85f)).coerceIn(48f, pageW * 0.9f)
         val aspect = signatureBitmap.height.toFloat() / signatureBitmap.width.coerceAtLeast(1).toFloat()
-        val targetH = (targetW * aspect).coerceIn(24f, 110f)
-        val x = box.lowerLeftX + pageW - targetW - 28f
-        val y = box.lowerLeftY + 28f
+        val targetH = (targetW * aspect).coerceIn(20f, pageH * 0.5f)
+        val x = (box.lowerLeftX + sigXNorm.coerceIn(0f, 0.92f) * pageW)
+            .coerceIn(box.lowerLeftX + 4f, box.lowerLeftX + pageW - targetW - 4f)
+        val yFromBottom = (1f - sigYNorm.coerceIn(0f, 0.94f)) * pageH - targetH / 2f
+        val y = (box.lowerLeftY + yFromBottom)
+            .coerceIn(box.lowerLeftY + 4f, box.lowerLeftY + pageH - targetH - 4f)
 
         PDPageContentStream(doc, page, PDPageContentStream.AppendMode.APPEND, true, true).use { cs ->
             cs.drawImage(sigImg, x, y, targetW, targetH)

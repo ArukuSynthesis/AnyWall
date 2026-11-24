@@ -8,7 +8,7 @@ import android.service.quicksettings.TileService
 import com.anywall.converter.MainActivity
 
 /**
- * Acceso rápido en el Panel de Ajustes Rápidos de Android (Quick Settings Tile - v0.3).
+ * Acceso rápido en el Panel de Ajustes Rápidos de Android (Quick Settings Tile - v0.4).
  * Permite abrir AnyWall: Universal Converter con un solo toque desde la barra superior del sistema.
  */
 class AnyWallQuickTileService : TileService() {
@@ -19,7 +19,7 @@ class AnyWallQuickTileService : TileService() {
             state = Tile.STATE_INACTIVE
             label = "AnyWall"
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                subtitle = "100% Offline"
+                subtitle = "Universal Converter"
             }
             updateTile()
         }

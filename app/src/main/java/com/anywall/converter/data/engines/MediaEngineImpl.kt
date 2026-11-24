@@ -16,6 +16,7 @@ import androidx.media3.common.MimeTypes
 import androidx.media3.common.audio.AudioProcessor
 import androidx.media3.common.audio.SonicAudioProcessor
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.effect.Crop
 import androidx.media3.effect.Presentation
 import androidx.media3.effect.ScaleAndRotateTransformation
 import androidx.media3.effect.SpeedChangeEffect
@@ -195,12 +196,12 @@ class MediaEngineImpl(
     private fun buildMediaItemWithOptionalTrim(tempInput: File, options: ConversionOptions): MediaItem {
         val builder = MediaItem.Builder().setUri(android.net.Uri.fromFile(tempInput))
         if (options.hasValidTrimRange) {
-            val startMs = (options.trimStartSeconds ?: 0L).coerceAtLeast(0L) * 1000L
-            val endSec = options.trimEndSeconds
+            val startMs = options.effectiveTrimStartMillis
+            val endMs = options.effectiveTrimEndMillis
             val clipBuilder = MediaItem.ClippingConfiguration.Builder()
                 .setStartPositionMs(startMs)
-            if (endSec != null && endSec * 1000L > startMs) {
-                clipBuilder.setEndPositionMs(endSec * 1000L)
+            if (endMs != null && endMs > startMs) {
+                clipBuilder.setEndPositionMs(endMs)
             }
             builder.setClippingConfiguration(clipBuilder.build())
         }
@@ -210,6 +211,18 @@ class MediaEngineImpl(
     private fun buildVideoAndAudioEffects(options: ConversionOptions): Effects {
         val videoEffects = mutableListOf<Effect>()
         val audioProcessors = mutableListOf<AudioProcessor>()
+
+        val cropSpec = options.videoCropSpec
+        if (cropSpec.isActive) {
+            videoEffects.add(
+                Crop(
+                    cropSpec.ndcLeft,
+                    cropSpec.ndcRight,
+                    cropSpec.ndcBottom,
+                    cropSpec.ndcTop
+                )
+            )
+        }
 
         val rot = options.normalizedVideoRotationDegrees
         if (rot != 0 || options.videoFlipHorizontal) {
@@ -497,30 +510,46 @@ class MediaEngineImpl(
                 totalPcmBytes = totalBytesWritten
             )
 
-            if (options.audioFadeInSeconds > 0 || options.audioFadeOutSeconds > 0) {
-                pcmInfo = PcmWavMp3AudioHelper.applyFadeInOutToPcm16Le(
-                    pcmInfo = pcmInfo,
-                    fadeInSeconds = options.audioFadeInSeconds,
-                    fadeOutSeconds = options.audioFadeOutSeconds,
-                    outputPcmFile = fadedPcmFile
-                )
-            }
+            val normPcmFile = uriResolver.createTempWorkingFile("norm_cat_pcm_", "pcm")
+            try {
+                if (options.audioNormalizeAutoGain) {
+                    onProgress(0.58f, "Normalizando volumen (Auto-Gain a -1.0 dBFS)…")
+                    pcmInfo = PcmWavMp3AudioHelper.normalizePcm16LeToTargetDbFs(
+                        pcmInfo = pcmInfo,
+                        targetDbFs = -1.0,
+                        outputPcmFile = normPcmFile
+                    )
+                }
 
-            onProgress(0.65f, "Codificando audio unido a ${targetFormat.label}…")
-            val effectiveTarget = if (targetFormat == SupportedFormat.WAV) SupportedFormat.WAV else SupportedFormat.MP3
-            if (effectiveTarget == SupportedFormat.WAV) {
-                PcmWavMp3AudioHelper.writeWavFileFromPcm16Le(pcmInfo, tempFinalOutput)
-            } else {
-                PcmWavMp3AudioHelper.encodePcm16LeToMp3(
-                    pcmInfo = pcmInfo,
-                    outputMp3File = tempFinalOutput,
-                    qualityPercent = options.clampedQuality,
-                    explicitBitrateKbps = options.audioBitrateKbps,
-                    onProgress = { subP ->
-                        onProgress(0.65f + subP * 0.32f, "Codificando audio unido (${(subP * 100).toInt()}%)…")
-                    }
-                )
+                if (options.audioFadeInSeconds > 0 || options.audioFadeOutSeconds > 0) {
+                    pcmInfo = PcmWavMp3AudioHelper.applyFadeInOutToPcm16Le(
+                        pcmInfo = pcmInfo,
+                        fadeInSeconds = options.audioFadeInSeconds,
+                        fadeOutSeconds = options.audioFadeOutSeconds,
+                        outputPcmFile = fadedPcmFile
+                    )
+                }
+
+                onProgress(0.65f, "Codificando audio unido a ${targetFormat.label}…")
+                val effectiveTarget = if (targetFormat == SupportedFormat.WAV) SupportedFormat.WAV else SupportedFormat.MP3
+                if (effectiveTarget == SupportedFormat.WAV) {
+                    PcmWavMp3AudioHelper.writeWavFileFromPcm16Le(pcmInfo, tempFinalOutput)
+                } else {
+                    PcmWavMp3AudioHelper.encodePcm16LeToMp3(
+                        pcmInfo = pcmInfo,
+                        outputMp3File = tempFinalOutput,
+                        qualityPercent = options.clampedQuality,
+                        explicitBitrateKbps = options.audioBitrateKbps,
+                        onProgress = { subP ->
+                            onProgress(0.65f + subP * 0.32f, "Codificando audio unido (${(subP * 100).toInt()}%)…")
+                        }
+                    )
+                    applyAudioMetadataIfConfigured(tempFinalOutput, SupportedFormat.MP3, options)
+                }
+            } finally {
+                normPcmFile.delete()
             }
+            val effectiveTarget = if (targetFormat == SupportedFormat.WAV) SupportedFormat.WAV else SupportedFormat.MP3
 
             val firstInput = inputs.first()
             val baseName = options.customOutputBaseName.ifBlank {
@@ -573,8 +602,8 @@ class MediaEngineImpl(
                 val durationMs = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
                     ?.toLongOrNull()?.coerceAtLeast(500L) ?: 3000L
 
-                val startMs = ((options.trimStartSeconds ?: 0L) * 1000L).coerceIn(0L, (durationMs - 200L).coerceAtLeast(0L))
-                val endMs = (options.trimEndSeconds?.let { it * 1000L } ?: durationMs)
+                val startMs = options.effectiveTrimStartMillis.coerceIn(0L, (durationMs - 200L).coerceAtLeast(0L))
+                val endMs = (options.effectiveTrimEndMillis ?: durationMs)
                     .coerceIn(startMs + 200L, durationMs)
                 val spanMs = (endMs - startMs).coerceAtLeast(200L)
 
@@ -784,6 +813,7 @@ class MediaEngineImpl(
             when (targetFormat) {
                 SupportedFormat.M4A -> {
                     // tempFinalOutput ya contiene el M4A generado por Media3 Transformer
+                    applyAudioMetadataIfConfigured(tempFinalOutput, SupportedFormat.M4A, options)
                 }
 
                 SupportedFormat.AAC -> {
@@ -803,6 +833,7 @@ class MediaEngineImpl(
                 SupportedFormat.WAV -> {
                     val sourceForDecode = if (transformerExtractedOk) tempExtractedM4a else tempInput
                     val tempPcm = uriResolver.createTempWorkingFile(prefix = "pcm_", extension = "pcm")
+                    val tempNormPcm = uriResolver.createTempWorkingFile(prefix = "pcm_norm_", extension = "pcm")
                     val tempFadedPcm = uriResolver.createTempWorkingFile(prefix = "pcm_fade_", extension = "pcm")
                     try {
                         onItemProgress(0.55f, "Decodificando audio a PCM 16-bit para WAV…")
@@ -816,6 +847,14 @@ class MediaEngineImpl(
                                 )
                             }
                         )
+                        if (options.audioNormalizeAutoGain) {
+                            onItemProgress(0.86f, "Normalizando volumen (Auto-Gain a -1.0 dBFS)…")
+                            pcmInfo = PcmWavMp3AudioHelper.normalizePcm16LeToTargetDbFs(
+                                pcmInfo = pcmInfo,
+                                targetDbFs = -1.0,
+                                outputPcmFile = tempNormPcm
+                            )
+                        }
                         if (options.audioFadeInSeconds > 0 || options.audioFadeOutSeconds > 0) {
                             pcmInfo = PcmWavMp3AudioHelper.applyFadeInOutToPcm16Le(
                                 pcmInfo = pcmInfo,
@@ -828,6 +867,7 @@ class MediaEngineImpl(
                         PcmWavMp3AudioHelper.writeWavFileFromPcm16Le(pcmInfo, tempFinalOutput)
                     } finally {
                         tempPcm.delete()
+                        tempNormPcm.delete()
                         tempFadedPcm.delete()
                     }
                 }
@@ -835,6 +875,7 @@ class MediaEngineImpl(
                 SupportedFormat.MP3 -> {
                     val sourceForDecode = if (transformerExtractedOk) tempExtractedM4a else tempInput
                     val tempPcm = uriResolver.createTempWorkingFile(prefix = "pcm_mp3_", extension = "pcm")
+                    val tempNormPcm = uriResolver.createTempWorkingFile(prefix = "pcm_mp3_norm_", extension = "pcm")
                     val tempFadedPcm = uriResolver.createTempWorkingFile(prefix = "pcm_mp3_fade_", extension = "pcm")
                     try {
                         onItemProgress(0.45f, "Decodificando muestras de audio para MP3…")
@@ -848,6 +889,14 @@ class MediaEngineImpl(
                                 )
                             }
                         )
+                        if (options.audioNormalizeAutoGain) {
+                            onItemProgress(0.66f, "Normalizando volumen (Auto-Gain a -1.0 dBFS)…")
+                            pcmInfo = PcmWavMp3AudioHelper.normalizePcm16LeToTargetDbFs(
+                                pcmInfo = pcmInfo,
+                                targetDbFs = -1.0,
+                                outputPcmFile = tempNormPcm
+                            )
+                        }
                         if (options.audioFadeInSeconds > 0 || options.audioFadeOutSeconds > 0) {
                             pcmInfo = PcmWavMp3AudioHelper.applyFadeInOutToPcm16Le(
                                 pcmInfo = pcmInfo,
@@ -864,13 +913,15 @@ class MediaEngineImpl(
                             explicitBitrateKbps = options.audioBitrateKbps,
                             onProgress = { subP ->
                                 onItemProgress(
-                                    0.70f + (subP * 0.29f),
+                                    0.70f + (subP * 0.27f),
                                     "Codificando MP3 (${(subP * 100).toInt()}%)…"
                                 )
                             }
                         )
+                        applyAudioMetadataIfConfigured(tempFinalOutput, SupportedFormat.MP3, options)
                     } finally {
                         tempPcm.delete()
+                        tempNormPcm.delete()
                         tempFadedPcm.delete()
                     }
                 }
@@ -925,6 +976,49 @@ class MediaEngineImpl(
             tempInput.delete()
             tempExtractedM4a.delete()
             tempFinalOutput.delete()
+        }
+    }
+
+    private fun applyAudioMetadataIfConfigured(
+        audioFile: File,
+        targetFormat: SupportedFormat,
+        options: ConversionOptions
+    ) {
+        val meta = options.audioMetadataSpec
+        if (meta.isEmpty) return
+
+        val coverBytes: ByteArray? = if (meta.coverArtPathOrUri.isNotBlank()) {
+            try {
+                val rawRef = meta.coverArtPathOrUri.trim()
+                val f = File(rawRef)
+                if (f.exists() && f.isFile) {
+                    f.readBytes()
+                } else {
+                    uriResolver.openInputStream(android.net.Uri.parse(rawRef)).use { it.readBytes() }
+                }
+            } catch (_: Throwable) {
+                null
+            }
+        } else {
+            null
+        }
+
+        try {
+            when (targetFormat) {
+                SupportedFormat.MP3 -> PcmWavMp3AudioHelper.writeId3v23TagsToMp3File(
+                    mp3File = audioFile,
+                    metadata = meta,
+                    coverArtBytes = coverBytes,
+                    coverMimeType = "image/jpeg"
+                )
+                SupportedFormat.M4A -> PcmWavMp3AudioHelper.writeMetadataAtomsToM4aFile(
+                    m4aFile = audioFile,
+                    metadata = meta,
+                    coverArtBytes = coverBytes
+                )
+                else -> {}
+            }
+        } catch (_: Throwable) {
         }
     }
 
