@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Etiqueta de versión (ej. v0.4)'
+        description: 'Etiqueta de versión (ej. v0.5)'
         required: true
-        default: 'v0.4'
+        default: 'v0.5'
 
 permissions:
   contents: write
@@ -136,7 +136,17 @@ jobs:
 
           Versión release compilada, firmada y auditada automáticamente de **AnyWall: Universal Converter** (\`com.anywall.converter\`), conversor universal para Android desarrollado por **SynthesizerEnd** (licencia \`AGPL-3.0-only\`).
 
-          ### Novedades de v0.4
+          ### Novedades de v0.5 (Rediseño Integral de UI / UX y Mejoras Táctiles)
+          - **Barra de navegación inferior moderna de 5 pestañas (\`NavigationBar\`):**
+            1. **Convertir (\`HomeScreen\`):** arranca directamente con la **Selección Rápida por Categoría y Formato Específico** (\`Imágenes\`, \`Documentos / PDF\`, \`Audio / Video\`, \`Comprimidos\`) para que el buscador solicite exclusivamente archivos del formato elegido (\`JPG\`, \`PNG\`, \`PDF\`, \`DOCX\`, \`MP4\`, \`MP3\`, \`RAR\`, \`ZIP\`, etc.), eliminando banners redundantes y presets.
+            2. **Estudios (\`ToolsHubScreen\`):** cuadrícula Bento dedicada a los **6 Estudios Táctiles y de Lote** (Estudio de Fotos, Estudio PDF y Firma, Línea de Tiempo Video/Audio, Encuadre de Video, Explorador \`.RAR\`/\`.ZIP\`/\`.7Z\` y Renombrador Masivo).
+            3. **Seguridad (\`SecurityAndDataScreen\`):** pestaña propia para **Datos Estructurados (\`JSON\`, \`CSV\`, \`XML\`, \`YAML\`, \`BASE64\`) y Bóveda Criptográfica \`AES-256-GCM\` (\`.anywall\`)** con acciones directas de **Cifrar → \`.anywall\`** y **Desencriptar \`.anywall\`**, además del espacio en pantalla completa para **Duplicados \`SHA-256\`**, **Inspector Forense de Metadatos & Hashes**, **Códigos QR (\`PNG\`/\`SVG\`)**, **Comparador \`Diff\`** y **Comparador \`Antes / Después\`**.
+            4. **Historial (\`HistoryScreen\`):** métricas de ahorro, filtro por categoría, búsqueda y multiselección.
+            5. **Ajustes (\`SettingsScreen\`):** pantalla completa nativa con muestras circulares de las 6 paletas de acento, modos Claro/Oscuro/Negro AMOLED \`#000000\`, Material You, privacidad EXIF/PIN, caché y **Actualizador desde GitHub Releases (\`GitHubUpdaterDialog\`)**.
+          - **Flujo limpio de 3 pasos en \`ConfigureScreen\`:** (1) Cola *Drag & Drop* con tarjetas minimalistas e insignias coloreadas + **Banners Contextuales de Estudios Táctiles**, (2) Selector segmentado de Formato Destino (*Convertir* vs *Comprimir/Extraer*) con estimador de peso en vivo y **Acordeones Colapsables de Opciones Avanzadas**, y (3) **Barra inferior fija (*Sticky Bottom CTA*)** para convertir o desencriptar con 1 toque.
+          - **Reproducción de video real por hardware y arrastre táctil fluido a 60 FPS:** \`MediaTimelineTrimmerDialog\` y \`VideoCropDialog\` renderizan video real con \`TextureView\` + \`MediaPlayer.setSurface\` y búsqueda en vivo, y todos los estudios táctiles (PDF firma/anotaciones, Trimmer inicio/fin + \`RangeSlider\`, Foto y cola) usan \`awaitEachGesture\` + \`rememberUpdatedState\` sin interrupciones durante el arrastre.
+
+          ### Características de v0.4 incluidas
           - **Temas:** Sistema, Claro, Oscuro y **Negro AMOLED (\`#000000\`)**, Material You y 6 paletas de acento (Indigo Studio, Esmeralda, Ámbar, Rosa, Cian, Monocromo).
           - **Cola inteligente:** reordenamiento *Drag & Drop*, Vista Rápida (\`QuickPeekDialog\`), estimador de tamaño de salida y **Smart Share Sheet** con acciones según MIME.
           - **Estudio de Fotos 100% táctil:** recorte con 8 tiradores, dial de enderezado \`-45°..+45°\`, proporciones, escáner de perspectiva de 4 esquinas con lupa 2.5×, ajustes en vivo, filtros con miniaturas reales, censura con pincel/rectángulos, texto interactivo, Deshacer/Rehacer, Antes/Después y "Aplicar a todo el lote".

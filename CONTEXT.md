@@ -1,6 +1,6 @@
-# AnyWall: Universal Converter — Documento de Contexto Arquitectónico (v0.4)
+# AnyWall: Universal Converter — Documento de Contexto Arquitectónico (v0.5)
 
-Este documento sirve como referencia técnica viva para futuras iteraciones, mantenimiento y evolución de **AnyWall: Universal Converter** (`com.anywall.converter`). Contiene las reglas inquebrantables, decisiones de diseño, arquitectura de paquetes, detalle de los 5 motores locales, flujos de datos y guías de compilación actualizadas a la versión **v0.4**.
+Este documento sirve como referencia técnica viva para futuras iteraciones, mantenimiento y evolución de **AnyWall: Universal Converter** (`com.anywall.converter`). Contiene las reglas inquebrantables, decisiones de diseño, arquitectura de paquetes, detalle de los 5 motores locales, flujos de datos y guías de compilación actualizadas a la versión **v0.5**.
 
 ---
 
@@ -9,10 +9,10 @@ Este documento sirve como referencia técnica viva para futuras iteraciones, man
 - **Nombre de la app:** AnyWall: Universal Converter
 - **Autor / Desarrollador:** **SynthesizerEnd** (`https://github.com/ArukuSynthesis/AnyWall`)
 - **Application ID / Namespace:** `com.anywall.converter`
-- **Versión actual:** `versionCode = 4` • `versionName = "0.4"`
+- **Versión actual:** `versionCode = 5` • `versionName = "0.5"`
 - **Idioma de la interfaz:** Bilingüe Español / Inglés (`AppLanguageMode`: `Sistema`, `Español`, `English`)
 - **Propósito:** Conversor universal nativo de Android (imágenes, documentos/PDF/XLSX/EPUB, audio, video, archivos comprimidos, datos estructurados y seguridad criptográfica) con todo el procesamiento ejecutado en el hardware del dispositivo y 0 permisos de red en el APK final.
-- **Estado actual:** Versión `v0.4` completa (temas AMOLED/Material You/acentos, cola Drag & Drop + Vista Rápida + estimador de tamaño, Smart Share Sheet, Estudio de Fotos táctil, `libarchive` NDK para `.rar`/`.rar5`/`.cbr`, cómics `.cbz`, línea de tiempo de video/audio, recorte de video, Auto-Gain + ID3v2.3, Estudio PDF táctil con anotaciones, renombrador masivo y detector de duplicados `SHA-256`), construida sobre la v0.3: funcional, sin stubs ni `// TODO`, con 5 motores locales (`ImageEngineImpl`, `DocumentEngineImpl`, `MediaEngineImpl`, `ArchiveEngineImpl`, `DataAndSecurityEngineImpl`), migraciones de Room (`v1 -> v2 -> v3` con `conversion_presets`), editores visuales de PDF e Imágenes, Firma Manuscrita, Bóveda Universal `AES-256-GCM`, QR offline, Inspector Forense & `SHA-256`, Diff local, Comparador Antes/Después, File Splitter/Joiner, Pipelines de 2 pasos y suite completa de pruebas unitarias pasando al 100%.
+- **Estado actual:** Versión `v0.5` completa (rediseño integral de UI con barra inferior de 4 pestañas `Convertir • Estudios • Historial • Ajustes`, Bento Grid, `ToolsHubScreen` y `SettingsScreen` en pantalla completa, `ConfigureScreen` con flujo de 3 pasos + acordeones colapsables + Sticky Bottom CTA, y actualizador desde GitHub Releases), construida sobre la v0.4 (temas AMOLED/Material You/acentos, cola Drag & Drop + Vista Rápida + estimador de tamaño, Smart Share Sheet, Estudio de Fotos táctil, `libarchive` NDK para `.rar`/`.rar5`/`.cbr`, cómics `.cbz`, línea de tiempo de video/audio, recorte de video, Auto-Gain + ID3v2.3, Estudio PDF táctil con anotaciones, renombrador masivo y detector de duplicados `SHA-256`), construida sobre la v0.3: funcional, sin stubs ni `// TODO`, con 5 motores locales (`ImageEngineImpl`, `DocumentEngineImpl`, `MediaEngineImpl`, `ArchiveEngineImpl`, `DataAndSecurityEngineImpl`), migraciones de Room (`v1 -> v2 -> v3` con `conversion_presets`), editores visuales de PDF e Imágenes, Firma Manuscrita, Bóveda Universal `AES-256-GCM`, QR offline, Inspector Forense & `SHA-256`, Diff local, Comparador Antes/Después, File Splitter/Joiner, Pipelines de 2 pasos y suite completa de pruebas unitarias pasando al 100%.
 
 ---
 

@@ -1,20 +1,26 @@
 package com.anywall.converter.ui.components
 
 import android.graphics.Bitmap
+import android.graphics.SurfaceTexture
 import android.media.MediaMetadataRetriever
 import android.media.MediaPlayer
+import android.os.Build
+import android.view.Surface
+import android.view.TextureView
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.gestures.detectDragGestures
-import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -40,17 +46,21 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.RangeSlider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -62,6 +72,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
@@ -69,6 +80,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.anywall.converter.R
@@ -85,8 +97,6 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.util.Locale
 import kotlin.math.abs
-import kotlin.math.max
-import kotlin.math.min
 import kotlin.math.roundToLong
 
 private enum class TimelineDragTarget {
@@ -97,10 +107,12 @@ private enum class TimelineDragTarget {
 }
 
 /**
- * Recortador Visual de Línea de Tiempo para Video y Audio (`MediaTimelineTrimmerDialog` - v0.4):
- * - Tira de fotogramas reales para Video o Forma de Onda PCM para Audio.
- * - Dos tiradores arrastrables de Inicio y Fin con precisión de milisegundos.
- * - Reproductor integrado para escuchar/previsualizar el tramo exacto.
+ * Recortador Visual de Línea de Tiempo para Video y Audio (`MediaTimelineTrimmerDialog` - v0.5):
+ * - Reproductor de video real por hardware (`TextureView` + `MediaPlayer.setSurface`) que muestra
+ *   el video en movimiento con su relación de aspecto real y actualiza el fotograma en vivo al arrastrar.
+ * - Tira de fotogramas reales para Video o Forma de Onda PCM real para Audio.
+ * - Dos tiradores arrastrables de Inicio y Fin con seguimiento continuo (`awaitEachGesture` + `rememberUpdatedState`)
+ *   sin cancelaciones a mitad del gesto, más `RangeSlider` sincronizado de apoyo.
  * - Botón directo en Video: "Capturar fotograma exacto" guardado en `Downloads/AnyWall/`.
  */
 @Composable
@@ -119,29 +131,49 @@ fun MediaTimelineTrimmerDialog(
     var startMs by remember { mutableLongStateOf(initialStartMs.coerceAtLeast(0L)) }
     var endMs by remember { mutableLongStateOf(initialEndMs.coerceAtLeast(0L)) }
     var playheadMs by remember { mutableLongStateOf(initialStartMs.coerceAtLeast(0L)) }
+    var videoAspectRatio by remember { mutableFloatStateOf(16f / 9f) }
 
     var isLoading by remember { mutableStateOf(true) }
     val frameStrip = remember { mutableStateListOf<Bitmap>() }
-    var currentVideoFrame by remember { mutableStateOf<Bitmap?>(null) }
-    var waveformPeaks by remember { mutableStateOf<FloatArray>(FloatArray(0)) }
+    var waveformPeaks by remember { mutableStateOf(FloatArray(0)) }
     var statusBanner by remember { mutableStateOf<String?>(null) }
 
     var mediaPlayer by remember { mutableStateOf<MediaPlayer?>(null) }
+    var videoSurface by remember { mutableStateOf<Surface?>(null) }
+    var textureViewRef by remember { mutableStateOf<TextureView?>(null) }
     var isPlaying by remember { mutableStateOf(false) }
-    var dragTarget by remember { mutableStateOf(TimelineDragTarget.NONE) }
+    var lastSeekWallClockMs by remember { mutableLongStateOf(0L) }
 
-    // Liberar MediaPlayer al cerrar el diálogo
-    DisposableEffect(mediaFile.uri) {
-        onDispose {
-            runCatching {
-                mediaPlayer?.stop()
-                mediaPlayer?.release()
+    fun seekPlayerSmooth(targetMs: Long, forceExact: Boolean = false) {
+        val mp = mediaPlayer ?: return
+        val now = System.currentTimeMillis()
+        if (!forceExact && now - lastSeekWallClockMs < 35L) return
+        lastSeekWallClockMs = now
+        runCatching {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val mode = if (forceExact) MediaPlayer.SEEK_CLOSEST else MediaPlayer.SEEK_PREVIOUS_SYNC
+                mp.seekTo(targetMs.coerceAtLeast(0L), mode)
+            } else {
+                mp.seekTo(targetMs.coerceAtLeast(0L).toInt())
             }
-            mediaPlayer = null
         }
     }
 
-    // Cargar metadatos, tira de fotogramas (video) o forma de onda (audio)
+    // Liberar MediaPlayer y Surface al cerrar el diálogo
+    DisposableEffect(mediaFile.uri) {
+        onDispose {
+            runCatching {
+                mediaPlayer?.setSurface(null)
+                mediaPlayer?.stop()
+                mediaPlayer?.release()
+            }
+            runCatching { videoSurface?.release() }
+            mediaPlayer = null
+            videoSurface = null
+        }
+    }
+
+    // Cargar metadatos, tira de fotogramas (video) o forma de onda (audio) e inicializar MediaPlayer
     LaunchedEffect(mediaFile.uri) {
         isLoading = true
         withContext(Dispatchers.IO) {
@@ -150,23 +182,27 @@ fun MediaTimelineTrimmerDialog(
                 retriever.setDataSource(context, mediaFile.uri)
                 val durStr = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
                 val dur = durStr?.toLongOrNull()?.coerceAtLeast(500L) ?: 15_000L
-                totalDurationMs = dur
+                val vWidth = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toFloatOrNull() ?: 16f
+                val vHeight = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toFloatOrNull() ?: 9f
+                val vRot = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)?.toIntOrNull() ?: 0
+                val aspect = if (vRot == 90 || vRot == 270) {
+                    (vHeight / vWidth.coerceAtLeast(1f)).coerceIn(0.35f, 2.8f)
+                } else {
+                    (vWidth / vHeight.coerceAtLeast(1f)).coerceIn(0.35f, 2.8f)
+                }
+
                 val initStart = initialStartMs.coerceIn(0L, (dur - 250L).coerceAtLeast(0L))
                 val initEnd = if (initialEndMs in (initStart + 100L)..dur) initialEndMs else dur
-                startMs = initStart
-                endMs = initEnd
-                playheadMs = initStart
+
+                withContext(Dispatchers.Main) {
+                    totalDurationMs = dur
+                    videoAspectRatio = aspect
+                    startMs = initStart
+                    endMs = initEnd
+                    playheadMs = initStart
+                }
 
                 if (isVideo) {
-                    // Extraer fotograma inicial de vista previa
-                    val firstBmp = retriever.getFrameAtTime(
-                        initStart * 1000L,
-                        MediaMetadataRetriever.OPTION_CLOSEST_SYNC
-                    )
-                    if (firstBmp != null) {
-                        currentVideoFrame = firstBmp
-                    }
-                    // Extraer 8 miniaturas a lo largo del video para la tira de tiempo
                     val stripCount = 8
                     val extracted = mutableListOf<Bitmap>()
                     for (i in 0 until stripCount) {
@@ -186,7 +222,6 @@ fun MediaTimelineTrimmerDialog(
                         frameStrip.addAll(extracted)
                     }
                 } else {
-                    // Extraer forma de onda real: decodificar el audio a PCM 16-bit LE y calcular picos
                     val resolver = UriFileResolver(context)
                     var sourceTemp: File? = null
                     val pcmTemp = File(context.cacheDir, "trim_wave_${System.nanoTime()}.pcm")
@@ -201,56 +236,66 @@ fun MediaTimelineTrimmerDialog(
                             tempPcmOutputFile = pcmTemp,
                             onProgress = { }
                         )
-                        waveformPeaks = PcmWavMp3AudioHelper
+                        val peaks = PcmWavMp3AudioHelper
                             .extractWaveformPeaksFromPcmFile(pcmFile = pcmTemp, bucketCount = 64)
                             .toFloatArray()
+                        withContext(Dispatchers.Main) {
+                            waveformPeaks = peaks
+                        }
                     } catch (e: Exception) {
-                        statusBanner = "No se pudo generar la forma de onda: ${e.localizedMessage ?: e.javaClass.simpleName}"
+                        withContext(Dispatchers.Main) {
+                            statusBanner = "No se pudo generar la forma de onda: ${e.localizedMessage ?: e.javaClass.simpleName}"
+                        }
                     } finally {
                         sourceTemp?.delete()
                         pcmTemp.delete()
                     }
                 }
             } catch (e: Exception) {
-                statusBanner = "No se pudieron leer los metadatos: ${e.localizedMessage ?: e.javaClass.simpleName}"
+                withContext(Dispatchers.Main) {
+                    statusBanner = "No se pudieron leer los metadatos: ${e.localizedMessage ?: e.javaClass.simpleName}"
+                }
             } finally {
                 runCatching { retriever.release() }
             }
         }
 
-        // Inicializar MediaPlayer para preescucha del tramo
+        // Inicializar MediaPlayer en el hilo principal y enlazar Surface si ya está disponible
         runCatching {
             val mp = MediaPlayer()
             mp.setDataSource(context, mediaFile.uri)
-            mp.prepare()
+            videoSurface?.let { mp.setSurface(it) }
+            mp.setOnPreparedListener { preparedMp ->
+                if (totalDurationMs <= 0L && preparedMp.duration > 0) {
+                    totalDurationMs = preparedMp.duration.toLong()
+                    if (endMs <= startMs) endMs = totalDurationMs
+                }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    preparedMp.seekTo(startMs, MediaPlayer.SEEK_CLOSEST)
+                } else {
+                    preparedMp.seekTo(startMs.toInt())
+                }
+            }
             mp.setOnCompletionListener {
                 isPlaying = false
                 playheadMs = startMs
+                seekPlayerSmooth(startMs, forceExact = true)
             }
+            mp.prepareAsync()
             mediaPlayer = mp
         }
         isLoading = false
     }
 
-    // Actualizar fotograma de video cuando se mueve el cabezal
-    LaunchedEffect(playheadMs, isVideo) {
-        if (!isVideo || isLoading) return@LaunchedEffect
-        val frame = withContext(Dispatchers.IO) {
-            val retriever = MediaMetadataRetriever()
-            try {
-                retriever.setDataSource(context, mediaFile.uri)
-                retriever.getFrameAtTime(
-                    playheadMs * 1000L,
-                    MediaMetadataRetriever.OPTION_CLOSEST
-                )
-            } catch (_: Exception) {
-                null
-            } finally {
-                runCatching { retriever.release() }
+    // Si la Surface de TextureView se crea después del MediaPlayer, vincularla inmediatamente
+    LaunchedEffect(videoSurface, mediaPlayer) {
+        val mp = mediaPlayer
+        val surf = videoSurface
+        if (mp != null && surf != null) {
+            runCatching {
+                mp.setSurface(surf)
+                seekPlayerSmooth(playheadMs, forceExact = true)
             }
-        }
-        if (frame != null) {
-            currentVideoFrame = frame
         }
     }
 
@@ -258,19 +303,19 @@ fun MediaTimelineTrimmerDialog(
     LaunchedEffect(isPlaying, startMs, endMs) {
         while (isPlaying) {
             val mp = mediaPlayer
-            if (mp != null && mp.isPlaying) {
-                val cur = mp.currentPosition.toLong()
+            if (mp != null && runCatching { mp.isPlaying }.getOrDefault(false)) {
+                val cur = runCatching { mp.currentPosition.toLong() }.getOrDefault(playheadMs)
                 playheadMs = cur.coerceIn(startMs, endMs)
                 if (cur >= endMs) {
-                    mp.pause()
-                    mp.seekTo(startMs.toInt())
+                    runCatching { mp.pause() }
+                    seekPlayerSmooth(startMs, forceExact = true)
                     playheadMs = startMs
                     isPlaying = false
                 }
             } else {
                 isPlaying = false
             }
-            delay(45L)
+            delay(35L)
         }
     }
 
@@ -281,7 +326,7 @@ fun MediaTimelineTrimmerDialog(
         Surface(
             modifier = Modifier
                 .fillMaxWidth(0.96f)
-                .clip(RoundedCornerShape(20.dp)),
+                .clip(RoundedCornerShape(22.dp)),
             color = Color(0xFF0E131A),
             contentColor = Color.White
         ) {
@@ -289,7 +334,7 @@ fun MediaTimelineTrimmerDialog(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
+                verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 // Encabezado
                 Row(
@@ -328,30 +373,60 @@ fun MediaTimelineTrimmerDialog(
                     }
                 }
 
-                // Vista previa visual (Fotograma actual para Video o Analizador de Onda para Audio)
+                // Vista previa visual real: TextureView de video con aceleración por hardware o Onda de Audio
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(if (isVideo) 220.dp else 110.dp)
-                        .clip(RoundedCornerShape(14.dp))
+                        .height(if (isVideo) 235.dp else 100.dp)
+                        .clip(RoundedCornerShape(16.dp))
                         .background(Color(0xFF07090D))
-                        .border(1.dp, Color(0xFF1E293B), RoundedCornerShape(14.dp)),
+                        .border(1.dp, Color(0xFF1E293B), RoundedCornerShape(16.dp)),
                     contentAlignment = Alignment.Center
                 ) {
-                    if (isLoading) {
+                    if (isVideo) {
+                        AndroidView(
+                            factory = { ctx ->
+                                TextureView(ctx).apply {
+                                    isOpaque = false
+                                    surfaceTextureListener = object : TextureView.SurfaceTextureListener {
+                                        override fun onSurfaceTextureAvailable(
+                                            surface: SurfaceTexture,
+                                            width: Int,
+                                            height: Int
+                                        ) {
+                                            val newSurf = Surface(surface)
+                                            videoSurface?.release()
+                                            videoSurface = newSurf
+                                            runCatching {
+                                                mediaPlayer?.setSurface(newSurf)
+                                                seekPlayerSmooth(playheadMs, forceExact = true)
+                                            }
+                                        }
+
+                                        override fun onSurfaceTextureSizeChanged(
+                                            surface: SurfaceTexture,
+                                            width: Int,
+                                            height: Int
+                                        ) = Unit
+
+                                        override fun onSurfaceTextureDestroyed(surface: SurfaceTexture): Boolean {
+                                            runCatching { mediaPlayer?.setSurface(null) }
+                                            runCatching { videoSurface?.release() }
+                                            videoSurface = null
+                                            return true
+                                        }
+
+                                        override fun onSurfaceTextureUpdated(surface: SurfaceTexture) = Unit
+                                    }
+                                    textureViewRef = this
+                                }
+                            },
+                            modifier = Modifier
+                                .fillMaxHeight()
+                                .aspectRatio(videoAspectRatio.coerceIn(0.4f, 2.4f), matchHeightConstraintsFirst = true)
+                        )
+                    } else if (isLoading) {
                         CircularProgressIndicator(color = Color(0xFF6366F1))
-                    } else if (isVideo) {
-                        val bmp = currentVideoFrame
-                        if (bmp != null) {
-                            Image(
-                                bitmap = bmp.asImageBitmap(),
-                                contentDescription = mediaFile.name,
-                                contentScale = ContentScale.Fit,
-                                modifier = Modifier.fillMaxSize()
-                            )
-                        } else {
-                            Text("Vista previa de video", color = Color(0xFF94A3B8))
-                        }
                     } else {
                         Column(
                             horizontalAlignment = Alignment.CenterHorizontally,
@@ -361,10 +436,10 @@ fun MediaTimelineTrimmerDialog(
                                 imageVector = Icons.Default.GraphicEq,
                                 contentDescription = null,
                                 tint = Color(0xFF38BDF8),
-                                modifier = Modifier.size(34.dp)
+                                modifier = Modifier.size(32.dp)
                             )
                             Text(
-                                text = "Preescucha de tramo: ${formatDurationMsPrecise(endMs - startMs)}",
+                                text = "Duración seleccionada: ${formatDurationMsPrecise(endMs - startMs)}",
                                 style = MaterialTheme.typography.labelMedium,
                                 color = Color(0xFFE2E8F0)
                             )
@@ -395,76 +470,114 @@ fun MediaTimelineTrimmerDialog(
                     )
                 }
 
-                // LÍNEA DE TIEMPO TÁCTIL CON TIRA DE FOTOGRAMAS / FORMA DE ONDA Y 2 TIRADORES ARRASTRABLES
+                // LÍNEA DE TIEMPO TÁCTIL CON SEGUIMIENTO CONTINUO (awaitEachGesture + rememberUpdatedState)
                 val safeTotal = totalDurationMs.coerceAtLeast(1000L)
+                val currentStartMs by rememberUpdatedState(startMs)
+                val currentEndMs by rememberUpdatedState(endMs)
+                val currentPlayheadMs by rememberUpdatedState(playheadMs)
+                val currentSafeTotal by rememberUpdatedState(safeTotal)
+
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(74.dp)
-                        .clip(RoundedCornerShape(12.dp))
+                        .height(78.dp)
+                        .clip(RoundedCornerShape(14.dp))
                         .background(Color(0xFF141A23))
-                        .pointerInput(safeTotal) {
-                            detectTapGestures { tapOffset ->
-                                val ratio = (tapOffset.x / size.width.toFloat().coerceAtLeast(1f)).coerceIn(0f, 1f)
-                                val tappedMs = (ratio * safeTotal).roundToLong()
-                                playheadMs = tappedMs.coerceIn(startMs, endMs)
-                                runCatching { mediaPlayer?.seekTo(playheadMs.toInt()) }
-                            }
-                        }
-                        .pointerInput(safeTotal) {
-                            detectDragGestures(
-                                onDragStart = { touch ->
-                                    val w = size.width.toFloat().coerceAtLeast(1f)
-                                    val startX = (startMs.toFloat() / safeTotal) * w
-                                    val endX = (endMs.toFloat() / safeTotal) * w
-                                    val playX = (playheadMs.toFloat() / safeTotal) * w
+                        .pointerInput(Unit) {
+                            awaitEachGesture {
+                                val down = awaitFirstDown(requireUnconsumed = false)
+                                down.consume()
+                                val padPx = 16.dp.toPx()
+                                val trackW = (size.width.toFloat() - 2f * padPx).coerceAtLeast(1f)
+                                val tot = currentSafeTotal.coerceAtLeast(1000L)
 
-                                    val distStart = abs(touch.x - startX)
-                                    val distEnd = abs(touch.x - endX)
-                                    val distPlay = abs(touch.x - playX)
+                                val startX = padPx + (currentStartMs.toFloat() / tot) * trackW
+                                val endX = padPx + (currentEndMs.toFloat() / tot) * trackW
+                                val playX = padPx + (currentPlayheadMs.toFloat() / tot) * trackW
 
-                                    dragTarget = when {
-                                        distStart <= 36f && distStart <= distEnd -> TimelineDragTarget.START_HANDLE
-                                        distEnd <= 36f -> TimelineDragTarget.END_HANDLE
-                                        distPlay <= 32f -> TimelineDragTarget.PLAYHEAD
-                                        touch.x < startX -> TimelineDragTarget.START_HANDLE
-                                        touch.x > endX -> TimelineDragTarget.END_HANDLE
-                                        else -> TimelineDragTarget.PLAYHEAD
+                                val distStart = abs(down.position.x - startX)
+                                val distEnd = abs(down.position.x - endX)
+                                val distPlay = abs(down.position.x - playX)
+                                val hitRadiusPx = 38.dp.toPx()
+
+                                val activeTarget = when {
+                                    distStart <= hitRadiusPx && distStart <= distEnd -> TimelineDragTarget.START_HANDLE
+                                    distEnd <= hitRadiusPx -> TimelineDragTarget.END_HANDLE
+                                    distPlay <= 28.dp.toPx() -> TimelineDragTarget.PLAYHEAD
+                                    down.position.x < startX -> TimelineDragTarget.START_HANDLE
+                                    down.position.x > endX -> TimelineDragTarget.END_HANDLE
+                                    else -> {
+                                        if (distStart < distEnd && distStart <= 56.dp.toPx()) {
+                                            TimelineDragTarget.START_HANDLE
+                                        } else if (distEnd <= 56.dp.toPx()) {
+                                            TimelineDragTarget.END_HANDLE
+                                        } else {
+                                            TimelineDragTarget.PLAYHEAD
+                                        }
                                     }
-                                },
-                                onDragEnd = { dragTarget = TimelineDragTarget.NONE },
-                                onDragCancel = { dragTarget = TimelineDragTarget.NONE },
-                                onDrag = { change, _ ->
-                                    change.consume()
-                                    val w = size.width.toFloat().coerceAtLeast(1f)
-                                    val ratio = (change.position.x / w).coerceIn(0f, 1f)
-                                    val targetMs = (ratio * safeTotal).roundToLong()
-                                    val minClipGap = 200L
+                                }
 
-                                    when (dragTarget) {
+                                if (isPlaying) {
+                                    runCatching { mediaPlayer?.pause() }
+                                    isPlaying = false
+                                }
+
+                                fun updateFromTouchX(touchX: Float, forceExactSeek: Boolean) {
+                                    val ratio = ((touchX - padPx) / trackW).coerceIn(0f, 1f)
+                                    val targetMs = (ratio * currentSafeTotal).roundToLong()
+                                    val minClipGap = 250L
+                                    when (activeTarget) {
                                         TimelineDragTarget.START_HANDLE -> {
-                                            startMs = targetMs.coerceIn(0L, (endMs - minClipGap).coerceAtLeast(0L))
-                                            playheadMs = startMs
-                                            runCatching { mediaPlayer?.seekTo(startMs.toInt()) }
+                                            val nextStart = targetMs.coerceIn(0L, (currentEndMs - minClipGap).coerceAtLeast(0L))
+                                            startMs = nextStart
+                                            playheadMs = nextStart
+                                            seekPlayerSmooth(nextStart, forceExact = forceExactSeek)
                                         }
                                         TimelineDragTarget.END_HANDLE -> {
-                                            endMs = targetMs.coerceIn((startMs + minClipGap).coerceAtMost(safeTotal), safeTotal)
-                                            playheadMs = endMs
-                                            runCatching { mediaPlayer?.seekTo(endMs.toInt()) }
+                                            val nextEnd = targetMs.coerceIn(
+                                                (currentStartMs + minClipGap).coerceAtMost(currentSafeTotal),
+                                                currentSafeTotal
+                                            )
+                                            endMs = nextEnd
+                                            playheadMs = nextEnd
+                                            seekPlayerSmooth(nextEnd, forceExact = forceExactSeek)
                                         }
                                         TimelineDragTarget.PLAYHEAD -> {
-                                            playheadMs = targetMs.coerceIn(startMs, endMs)
-                                            runCatching { mediaPlayer?.seekTo(playheadMs.toInt()) }
+                                            val nextPlay = targetMs.coerceIn(currentStartMs, currentEndMs)
+                                            playheadMs = nextPlay
+                                            seekPlayerSmooth(nextPlay, forceExact = forceExactSeek)
                                         }
                                         TimelineDragTarget.NONE -> Unit
                                     }
                                 }
-                            )
+
+                                updateFromTouchX(down.position.x, forceExactSeek = false)
+
+                                while (true) {
+                                    val event = awaitPointerEvent()
+                                    val change = event.changes.firstOrNull { it.id == down.id }
+                                        ?: event.changes.firstOrNull()
+                                        ?: break
+                                    if (!change.pressed) {
+                                        updateFromTouchX(change.position.x, forceExactSeek = true)
+                                        break
+                                    }
+                                    if (change.positionChange() != Offset.Zero) {
+                                        change.consume()
+                                        updateFromTouchX(change.position.x, forceExactSeek = false)
+                                    }
+                                }
+                            }
                         }
                 ) {
-                    // Fondo de fotogramas reales (Video)
+                    // Fondo de fotogramas reales (Video) con margen horizontal para que los tiradores nunca se corten
                     if (isVideo && frameStrip.isNotEmpty()) {
-                        Row(modifier = Modifier.fillMaxSize()) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(horizontal = 16.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                        ) {
                             frameStrip.forEach { thumb ->
                                 Image(
                                     bitmap = thumb.asImageBitmap(),
@@ -480,19 +593,20 @@ fun MediaTimelineTrimmerDialog(
 
                     // Overlay de Forma de Onda (Audio) + Máscaras + Tiradores de Inicio y Fin
                     Canvas(modifier = Modifier.fillMaxSize()) {
-                        val w = size.width
+                        val padPx = 16.dp.toPx()
+                        val trackW = (size.width - 2f * padPx).coerceAtLeast(1f)
                         val h = size.height
-                        val startX = ((startMs.toFloat() / safeTotal) * w).coerceIn(0f, w)
-                        val endX = ((endMs.toFloat() / safeTotal) * w).coerceIn(startX, w)
-                        val playX = ((playheadMs.toFloat() / safeTotal) * w).coerceIn(startX, endX)
+                        val startX = (padPx + (startMs.toFloat() / safeTotal) * trackW).coerceIn(padPx, padPx + trackW)
+                        val endX = (padPx + (endMs.toFloat() / safeTotal) * trackW).coerceIn(startX, padPx + trackW)
+                        val playX = (padPx + (playheadMs.toFloat() / safeTotal) * trackW).coerceIn(startX, endX)
 
                         // Si es audio, dibujar barras de la forma de onda PCM
                         if (!isVideo && waveformPeaks.isNotEmpty()) {
                             val barCount = waveformPeaks.size
-                            val slotW = w / barCount
+                            val slotW = trackW / barCount
                             val barW = (slotW * 0.62f).coerceAtLeast(2f)
                             for (i in 0 until barCount) {
-                                val bx = i * slotW + (slotW - barW) / 2f
+                                val bx = padPx + i * slotW + (slotW - barW) / 2f
                                 val amp = waveformPeaks[i].coerceIn(0.08f, 1f)
                                 val bh = (amp * h * 0.80f).coerceAtLeast(4f)
                                 val by = (h - bh) / 2f
@@ -508,38 +622,51 @@ fun MediaTimelineTrimmerDialog(
 
                         // Oscurecer zonas descartadas izquierda y derecha
                         drawRect(
-                            color = Color(0xB3000000),
+                            color = Color(0xB8000000),
                             topLeft = Offset(0f, 0f),
                             size = Size(startX, h)
                         )
                         drawRect(
-                            color = Color(0xB3000000),
+                            color = Color(0xB8000000),
                             topLeft = Offset(endX, 0f),
-                            size = Size((w - endX).coerceAtLeast(0f), h)
+                            size = Size((size.width - endX).coerceAtLeast(0f), h)
                         )
 
                         // Marco del segmento activo
                         drawRect(
                             color = Color(0xFF6366F1),
-                            topLeft = Offset(startX, 0f),
-                            size = Size((endX - startX).coerceAtLeast(2f), h),
+                            topLeft = Offset(startX, 2.dp.toPx()),
+                            size = Size((endX - startX).coerceAtLeast(2f), h - 4.dp.toPx()),
                             style = Stroke(width = 2.5.dp.toPx())
                         )
 
-                        // Tirador izquierdo (INICIO)
-                        val handleW = 12.dp.toPx()
+                        // Tirador izquierdo (INICIO) con agarre ancho
+                        val handleW = 16.dp.toPx()
                         drawRoundRect(
                             color = Color(0xFF10B981),
-                            topLeft = Offset((startX - handleW / 2f).coerceIn(0f, w - handleW), 0f),
+                            topLeft = Offset(startX - handleW / 2f, 0f),
                             size = Size(handleW, h),
-                            cornerRadius = CornerRadius(4.dp.toPx(), 4.dp.toPx())
+                            cornerRadius = CornerRadius(6.dp.toPx(), 6.dp.toPx())
                         )
-                        // Tirador derecho (FIN)
+                        drawLine(
+                            color = Color.White,
+                            start = Offset(startX, h * 0.28f),
+                            end = Offset(startX, h * 0.72f),
+                            strokeWidth = 2.dp.toPx()
+                        )
+
+                        // Tirador derecho (FIN) con agarre ancho
                         drawRoundRect(
                             color = Color(0xFF6366F1),
-                            topLeft = Offset((endX - handleW / 2f).coerceIn(0f, w - handleW), 0f),
+                            topLeft = Offset(endX - handleW / 2f, 0f),
                             size = Size(handleW, h),
-                            cornerRadius = CornerRadius(4.dp.toPx(), 4.dp.toPx())
+                            cornerRadius = CornerRadius(6.dp.toPx(), 6.dp.toPx())
+                        )
+                        drawLine(
+                            color = Color.White,
+                            start = Offset(endX, h * 0.28f),
+                            end = Offset(endX, h * 0.72f),
+                            strokeWidth = 2.dp.toPx()
                         )
 
                         // Cabezal de reproducción (Playhead)
@@ -557,6 +684,37 @@ fun MediaTimelineTrimmerDialog(
                     }
                 }
 
+                // Control deslizante doble adicional (RangeSlider) sincronizado para ajuste rápido con 2 pulgares
+                RangeSlider(
+                    value = (startMs.toFloat() / safeTotal).coerceIn(0f, 1f)..(endMs.toFloat() / safeTotal).coerceIn(0f, 1f),
+                    onValueChange = { range ->
+                        if (isPlaying) {
+                            runCatching { mediaPlayer?.pause() }
+                            isPlaying = false
+                        }
+                        val minGap = 250L
+                        val newStart = (range.start * safeTotal).roundToLong().coerceIn(0L, (safeTotal - minGap).coerceAtLeast(0L))
+                        val newEnd = (range.endInclusive * safeTotal).roundToLong().coerceIn((newStart + minGap).coerceAtMost(safeTotal), safeTotal)
+                        val startChanged = abs(newStart - startMs) >= abs(newEnd - endMs)
+                        startMs = newStart
+                        endMs = newEnd
+                        val seekTarget = if (startChanged) newStart else newEnd
+                        playheadMs = seekTarget
+                        seekPlayerSmooth(seekTarget, forceExact = false)
+                    },
+                    onValueChangeFinished = {
+                        seekPlayerSmooth(playheadMs, forceExact = true)
+                    },
+                    colors = SliderDefaults.colors(
+                        thumbColor = Color(0xFF10B981),
+                        activeTrackColor = Color(0xFF6366F1),
+                        inactiveTrackColor = Color(0xFF1E293B)
+                    ),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(28.dp)
+                )
+
                 // Controles de Reproducción y "Capturar fotograma exacto"
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -569,14 +727,14 @@ fun MediaTimelineTrimmerDialog(
                                 val mp = mediaPlayer
                                 if (mp != null) {
                                     if (isPlaying) {
-                                        mp.pause()
+                                        runCatching { mp.pause() }
                                         isPlaying = false
                                     } else {
                                         if (playheadMs < startMs || playheadMs >= endMs - 100L) {
                                             playheadMs = startMs
                                         }
-                                        mp.seekTo(playheadMs.toInt())
-                                        mp.start()
+                                        seekPlayerSmooth(playheadMs, forceExact = true)
+                                        runCatching { mp.start() }
                                         isPlaying = true
                                     }
                                 }
@@ -598,7 +756,7 @@ fun MediaTimelineTrimmerDialog(
                                 playheadMs = 0L
                                 runCatching {
                                     mediaPlayer?.pause()
-                                    mediaPlayer?.seekTo(0)
+                                    seekPlayerSmooth(0L, forceExact = true)
                                 }
                                 isPlaying = false
                             },
@@ -615,15 +773,18 @@ fun MediaTimelineTrimmerDialog(
                         FilledTonalButton(
                             onClick = {
                                 val targetTimeMs = playheadMs
+                                val liveTextureBmp = runCatching { textureViewRef?.bitmap }.getOrNull()
                                 scope.launch {
                                     val savedMsg = withContext(Dispatchers.IO) {
                                         val retriever = MediaMetadataRetriever()
                                         try {
-                                            retriever.setDataSource(context, mediaFile.uri)
-                                            val hiResFrame = retriever.getFrameAtTime(
-                                                targetTimeMs * 1000L,
-                                                MediaMetadataRetriever.OPTION_CLOSEST
-                                            ) ?: currentVideoFrame
+                                            val hiResFrame = runCatching {
+                                                retriever.setDataSource(context, mediaFile.uri)
+                                                retriever.getFrameAtTime(
+                                                    targetTimeMs * 1000L,
+                                                    MediaMetadataRetriever.OPTION_CLOSEST
+                                                )
+                                            }.getOrNull() ?: liveTextureBmp
                                             if (hiResFrame != null) {
                                                 val bos = ByteArrayOutputStream()
                                                 hiResFrame.compress(Bitmap.CompressFormat.PNG, 100, bos)
@@ -718,7 +879,7 @@ private fun TimeStampBadge(
     Surface(
         color = Color(0xFF1A2230),
         shape = RoundedCornerShape(8.dp),
-        border = androidx.compose.foundation.BorderStroke(1.dp, accentColor.copy(alpha = 0.55f))
+        border = BorderStroke(1.dp, accentColor.copy(alpha = 0.55f))
     ) {
         Column(
             modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),

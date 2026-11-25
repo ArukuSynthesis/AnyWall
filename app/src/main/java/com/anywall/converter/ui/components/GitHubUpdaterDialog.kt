@@ -104,8 +104,8 @@ data class LocalApkUpdateCandidate(
  * y parsear respuestas JSON de GitHub Releases API sin dependencias externas.
  */
 object GitHubUpdaterHelper {
-    const val CURRENT_VERSION_NAME = "0.4"
-    const val CURRENT_VERSION_CODE = 4L
+    const val CURRENT_VERSION_NAME = "0.5"
+    const val CURRENT_VERSION_CODE = 5L
     const val GITHUB_REPO_SLUG = "ArukuSynthesis/AnyWall"
     const val GITHUB_RELEASES_LATEST_URL = "https://github.com/ArukuSynthesis/AnyWall/releases/latest"
     const val GITHUB_RELEASES_LIST_URL = "https://github.com/ArukuSynthesis/AnyWall/releases"

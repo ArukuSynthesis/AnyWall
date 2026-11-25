@@ -94,6 +94,55 @@ data class ConfigureUiState(
     val visualPdfEditsList: List<PdfPageEditItem>
         get() = PdfPageEditItem.fromJsonArrayString(options.pdfVisualPageEditsJson)
 
+    val activeVisualPdfPagesCount: Int
+        get() = visualPdfEditsList.count { it.included }
+
+    val showImageQualityOptions: Boolean
+        get() = showQualitySlider
+
+    val showImageTransformOptions: Boolean
+        get() = showImageResizeOption || showImageRotationAndExifOptions || showImageAdvancedV03Options
+
+    val showMultiFileMergePdfToggle: Boolean
+        get() = showMergePdfToggle
+
+    val showSinglePdfActionOptions: Boolean
+        get() = showPdfActionModeSelector
+
+    val showPdfPasswordInput: Boolean
+        get() = showPdfPasswordField
+
+    val showVideoOptions: Boolean
+        get() = showVideoResolutionSelector
+
+    val showAudioAdvancedOptions: Boolean
+        get() = showAudioV03Options
+
+    val showArchiveLevelOptions: Boolean
+        get() = showArchiveV03Options && selectedTargetFormat?.isArchiveOutput == true
+
+    val showFileSplitOptions: Boolean
+        get() = selectedTargetFormat == SupportedFormat.FILE_PARTS
+
+    val showVaultSecurityOptions: Boolean
+        get() = showVaultPasswordField
+
+    val showQrGeneratorOptions: Boolean
+        get() = selectedTargetFormat in setOf(SupportedFormat.QR_PNG, SupportedFormat.QR_SVG)
+
+    val showAnimatedGifOptions: Boolean
+        get() = selectedTargetFormat == SupportedFormat.GIF
+
+    val showDocumentPageLayoutOptions: Boolean
+        get() = showPdfPageSetupSelector
+
+    val showPdfBrandingAndStampOptions: Boolean
+        get() = showPdfDecorationsSection
+
+    val showStructuredDataAndTextOptions: Boolean
+        get() = showStructuredDataV03Options
+
+
     val showVisualPdfEditorButton: Boolean
         get() {
             val target = selectedTargetFormat ?: return false

@@ -1,13 +1,27 @@
-# AnyWall: Universal Converter (v0.4)
+# AnyWall: Universal Converter (v0.5)
 
 **Conversor Universal para Android** desarrollado por **SynthesizerEnd**.
 
 **AnyWall** (`com.anywall.converter`) convierte y edita imágenes, documentos Office/PDF/XLSX/EPUB, video, audio, cómics, archivos comprimidos y datos estructurados ejecutando todo el procesamiento en el hardware del dispositivo. El APK final declara **0 permisos de red** (`INTERNET`, `ACCESS_NETWORK_STATE`, `ACCESS_WIFI_STATE`), verificado automáticamente en CI con `aapt2 dump permissions`.
 
-- **Versión:** `versionCode = 4` • `versionName = "0.4"`
+- **Versión:** `versionCode = 5` • `versionName = "0.5"`
 - **Android mínimo:** 8.0 (API 26) • **Target SDK:** 35
 
 ---
+
+## Novedades de v0.5 (Rediseño Integral de UI y Arquitectura de Navegación)
+
+- **Barra de Navegación Inferior Moderna de 4 Pestañas (`AnyWallNavHost`):**
+  1. **Convertir:** Dashboard estilo **Bento Grid 2×2 + 1** con Hero Dropzone, banner de lote activo con contador en badge y acceso rápido a perfiles guardados.
+  2. **Estudios (`ToolsHubScreen`):** pantalla completa nativa (sin `AlertDialog`s gigantes) que organiza en tarjetas Bento los **6 Estudios Táctiles** (Estudio de Fotos, Estudio PDF y Firma, Línea de Tiempo Video/Audio, Encuadre de Video, Explorador `.RAR`/`.ZIP`/`.7Z` y Renombrador Masivo) y el espacio de trabajo integrado para las **5 Utilidades Técnicas** (Duplicados `SHA-256`, Metadatos & Hashes, Códigos QR, Comparador `Diff` y `Antes / Después`).
+  3. **Historial (`HistoryScreen`):** métricas de ahorro de almacenamiento, filtro por categorías, búsqueda instantánea y multiselección.
+  4. **Ajustes (`SettingsScreen`):** pantalla completa nativa con tarjeta Hero `AnyWall v0.5`, acceso directo al **Actualizador de GitHub Releases (`GitHubUpdaterDialog`)**, selector visual con muestras circulares de las **6 paletas de acento**, modo **Negro AMOLED (`#000000`)** + **Material You**, idioma (`Sistema`/`ES`/`EN`), bloqueo Biométrico/PIN y gestión de caché.
+- **Nuevo Flujo de Conversión en 3 Pasos (`ConfigureScreen`):**
+  - **Paso 1 (Archivos en Cola):** tarjetas `InputFileCard` rediseñadas con insignias de formato coloreadas, *Drag & Drop* táctil, *Quick Peek* y barra compacta de orden/renombrado/deduplicación.
+  - **Estudios Táctiles Contextuales Destacados:** aparecen tarjetas Hero solo para los formatos presentes en el lote activo.
+  - **Paso 2 (Formato Destino y Control Esencial):** selector segmentado de 2 modos (*Convertir* vs *Comprimir / Extraer*), estimador de tamaño en vivo (`OutputSizeEstimator`) y solo el ajuste primario indispensable visible por defecto.
+  - **Acordeones Colapsables de "Opciones Avanzadas":** cerrados por defecto para evitar saturación visual, agrupando ajustes avanzados del formato, etiquetas ID3v2.3 + carátula, plantillas de nombre y pipelines de 2 pasos.
+  - **Paso 3 (Barra Inferior Fija / Sticky Bottom CTA):** botón principal `"Convertir a [FORMATO]"` y guardado de Preset siempre accesibles en la parte inferior sin necesidad de hacer scroll.
 
 ## Novedades de v0.4
 

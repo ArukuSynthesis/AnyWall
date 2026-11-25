@@ -1,16 +1,23 @@
 package com.anywall.converter.ui.components
 
-import android.graphics.Bitmap
+import android.graphics.SurfaceTexture
 import android.media.MediaMetadataRetriever
+import android.media.MediaPlayer
+import android.os.Build
+import android.view.Surface
+import android.view.TextureView
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -23,10 +30,12 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Crop
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.RestartAlt
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
@@ -36,27 +45,29 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
-import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.anywall.converter.R
@@ -67,7 +78,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlin.math.abs
 import kotlin.math.hypot
-import kotlin.math.min
 
 private enum class VideoCropHandle {
     NONE,
@@ -83,9 +93,10 @@ private enum class VideoCropHandle {
 }
 
 /**
- * Recorte Táctil de Encuadre de Video (`VideoCropDialog` - v0.4):
- * - Extrae un fotograma real del video y permite arrastrar 8 tiradores táctiles (4 esquinas + 4 bordes)
- *   o elegir proporciones estándar (`Libre`, `Original`, `1:1`, `4:5`, `3:4`, `16:9`, `9:16`).
+ * Recorte Táctil de Encuadre de Video (`VideoCropDialog` - v0.5):
+ * - Reproduce el video real por hardware (`TextureView` + `MediaPlayer.setSurface`) directamente
+ *   detrás de la rejilla interactiva de 8 tiradores táctiles, con botón de Reproducir / Pausar.
+ * - Arrastre continuo a 60 FPS (`awaitEachGesture` + `rememberUpdatedState`) sin cancelaciones.
  * - El resultado `VideoCropSpec` se aplica en `MediaEngineImpl` mediante `androidx.media3.effect.Crop`.
  */
 @Composable
@@ -98,29 +109,75 @@ fun VideoCropDialog(
 ) {
     val context = LocalContext.current
     var cropSpec by remember(initialCropSpec) { mutableStateOf(initialCropSpec) }
-    var frameBitmap by remember { mutableStateOf<Bitmap?>(null) }
-    var isLoading by remember { mutableStateOf(true) }
-    var activeHandle by remember { mutableStateOf(VideoCropHandle.NONE) }
+    var videoAspect by remember { mutableFloatStateOf(16f / 9f) }
+    var mediaPlayer by remember { mutableStateOf<MediaPlayer?>(null) }
+    var videoSurface by remember { mutableStateOf<Surface?>(null) }
+    var isPlaying by remember { mutableStateOf(false) }
+
+    DisposableEffect(videoFile.uri) {
+        onDispose {
+            runCatching {
+                mediaPlayer?.setSurface(null)
+                mediaPlayer?.stop()
+                mediaPlayer?.release()
+            }
+            runCatching { videoSurface?.release() }
+            mediaPlayer = null
+            videoSurface = null
+        }
+    }
 
     LaunchedEffect(videoFile.uri, sampleTimeMs) {
-        isLoading = true
-        val extracted = withContext(Dispatchers.IO) {
+        val aspect = withContext(Dispatchers.IO) {
             val retriever = MediaMetadataRetriever()
             try {
                 retriever.setDataSource(context, videoFile.uri)
-                val dur = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 4000L
-                val probeUs = if (sampleTimeMs > 0L) sampleTimeMs * 1000L else (dur / 4L) * 1000L
-                retriever.getFrameAtTime(probeUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
-                    ?: retriever.getFrameAtTime(0L)
+                val w = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toFloatOrNull() ?: 1280f
+                val h = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toFloatOrNull() ?: 720f
+                val rot = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)?.toIntOrNull() ?: 0
+                if (rot == 90 || rot == 270) {
+                    (h / w.coerceAtLeast(1f)).coerceIn(0.35f, 2.8f)
+                } else {
+                    (w / h.coerceAtLeast(1f)).coerceIn(0.35f, 2.8f)
+                }
             } catch (_: Exception) {
-                null
+                16f / 9f
             } finally {
                 runCatching { retriever.release() }
             }
         }
-        frameBitmap = extracted
-        isLoading = false
+        videoAspect = aspect
+
+        runCatching {
+            val mp = MediaPlayer()
+            mp.setDataSource(context, videoFile.uri)
+            mp.isLooping = true
+            videoSurface?.let { mp.setSurface(it) }
+            mp.setOnPreparedListener { prepared ->
+                val startSeek = sampleTimeMs.coerceAtLeast(0L)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    prepared.seekTo(startSeek, MediaPlayer.SEEK_CLOSEST)
+                } else {
+                    prepared.seekTo(startSeek.toInt())
+                }
+                prepared.start()
+                isPlaying = true
+            }
+            mp.prepareAsync()
+            mediaPlayer = mp
+        }
     }
+
+    LaunchedEffect(videoSurface, mediaPlayer) {
+        val mp = mediaPlayer
+        val surf = videoSurface
+        if (mp != null && surf != null) {
+            runCatching { mp.setSurface(surf) }
+        }
+    }
+
+    val currentCropSpec by rememberUpdatedState(cropSpec)
+    val currentVideoAspect by rememberUpdatedState(videoAspect)
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -129,7 +186,7 @@ fun VideoCropDialog(
         Surface(
             modifier = Modifier
                 .fillMaxWidth(0.96f)
-                .clip(RoundedCornerShape(20.dp)),
+                .clip(RoundedCornerShape(22.dp)),
             color = Color(0xFF0B0D10),
             contentColor = Color.White
         ) {
@@ -176,81 +233,118 @@ fun VideoCropDialog(
                     }
                 }
 
-                // Lienzo táctil de recorte con 8 tiradores sobre el fotograma del video
+                // Contenedor con el video en vivo por hardware + overlay táctil de 8 tiradores exactamente encima
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(310.dp)
                         .clip(RoundedCornerShape(14.dp))
-                        .background(Color(0xFF131720)),
+                        .background(Color(0xFF07090D))
+                        .padding(10.dp),
                     contentAlignment = Alignment.Center
                 ) {
-                    val bmp = frameBitmap
-                    if (isLoading) {
-                        CircularProgressIndicator(color = Color(0xFF6366F1))
-                    } else {
-                        val bmpW = (bmp?.width ?: 1280).toFloat()
-                        val bmpH = (bmp?.height ?: 720).toFloat()
+                    Box(
+                        modifier = Modifier
+                            .fillMaxHeight()
+                            .aspectRatio(videoAspect.coerceIn(0.35f, 2.6f), matchHeightConstraintsFirst = true)
+                    ) {
+                        AndroidView(
+                            factory = { ctx ->
+                                TextureView(ctx).apply {
+                                    isOpaque = false
+                                    surfaceTextureListener = object : TextureView.SurfaceTextureListener {
+                                        override fun onSurfaceTextureAvailable(
+                                            surface: SurfaceTexture,
+                                            width: Int,
+                                            height: Int
+                                        ) {
+                                            val newSurf = Surface(surface)
+                                            videoSurface?.release()
+                                            videoSurface = newSurf
+                                            runCatching { mediaPlayer?.setSurface(newSurf) }
+                                        }
 
+                                        override fun onSurfaceTextureSizeChanged(
+                                            surface: SurfaceTexture,
+                                            width: Int,
+                                            height: Int
+                                        ) = Unit
+
+                                        override fun onSurfaceTextureDestroyed(surface: SurfaceTexture): Boolean {
+                                            runCatching { mediaPlayer?.setSurface(null) }
+                                            runCatching { videoSurface?.release() }
+                                            videoSurface = null
+                                            return true
+                                        }
+
+                                        override fun onSurfaceTextureUpdated(surface: SurfaceTexture) = Unit
+                                    }
+                                }
+                            },
+                            modifier = Modifier.fillMaxSize()
+                        )
+
+                        // Overlay Canvas de Recorte con 8 tiradores táctiles sobre el área exacta del video
                         Canvas(
                             modifier = Modifier
                                 .fillMaxSize()
-                                .padding(12.dp)
-                                .pointerInput(bmpW, bmpH) {
-                                    detectDragGestures(
-                                        onDragStart = { touch ->
-                                            val rect = computeVideoFrameRect(size.width.toFloat(), size.height.toFloat(), bmpW, bmpH)
-                                            activeHandle = hitTestVideoCropHandle(touch, rect, cropSpec)
-                                        },
-                                        onDragEnd = { activeHandle = VideoCropHandle.NONE },
-                                        onDragCancel = { activeHandle = VideoCropHandle.NONE },
-                                        onDrag = { change, dragAmount ->
-                                            if (activeHandle == VideoCropHandle.NONE) return@detectDragGestures
-                                            change.consume()
-                                            val rect = computeVideoFrameRect(size.width.toFloat(), size.height.toFloat(), bmpW, bmpH)
-                                            val dx = dragAmount.x / rect.width.coerceAtLeast(1f)
-                                            val dy = dragAmount.y / rect.height.coerceAtLeast(1f)
-                                            cropSpec = dragVideoCropSpec(
-                                                current = cropSpec,
-                                                handle = activeHandle,
-                                                dx = dx,
-                                                dy = dy,
-                                                videoAspect = bmpW / bmpH.coerceAtLeast(1f)
-                                            )
+                                .pointerInput(Unit) {
+                                    awaitEachGesture {
+                                        val down = awaitFirstDown(requireUnconsumed = false)
+                                        val w = size.width.toFloat().coerceAtLeast(1f)
+                                        val h = size.height.toFloat().coerceAtLeast(1f)
+                                        val hitR = 34.dp.toPx().toDouble()
+                                        val edgeTol = 26.dp.toPx()
+
+                                        val handle = hitTestVideoCropHandleOnBox(
+                                            touch = down.position,
+                                            boxW = w,
+                                            boxH = h,
+                                            spec = currentCropSpec,
+                                            hitRadiusPx = hitR,
+                                            edgeTolerancePx = edgeTol
+                                        )
+                                        if (handle == VideoCropHandle.NONE) return@awaitEachGesture
+                                        down.consume()
+
+                                        while (true) {
+                                            val event = awaitPointerEvent()
+                                            val change = event.changes.firstOrNull { it.id == down.id }
+                                                ?: event.changes.firstOrNull()
+                                                ?: break
+                                            if (!change.pressed) break
+                                            val delta = change.positionChange()
+                                            if (delta != Offset.Zero) {
+                                                change.consume()
+                                                val dx = delta.x / w
+                                                val dy = delta.y / h
+                                                cropSpec = dragVideoCropSpec(
+                                                    current = currentCropSpec,
+                                                    handle = handle,
+                                                    dx = dx,
+                                                    dy = dy,
+                                                    videoAspect = currentVideoAspect
+                                                )
+                                            }
                                         }
-                                    )
+                                    }
                                 }
                         ) {
-                            val rect = computeVideoFrameRect(size.width, size.height, bmpW, bmpH)
-                            if (bmp != null) {
-                                drawIntoCanvas { canvas ->
-                                    val dst = android.graphics.RectF(rect.left, rect.top, rect.right, rect.bottom)
-                                    val paint = android.graphics.Paint(
-                                        android.graphics.Paint.ANTI_ALIAS_FLAG or android.graphics.Paint.FILTER_BITMAP_FLAG
-                                    )
-                                    canvas.nativeCanvas.drawBitmap(bmp, null, dst, paint)
-                                }
-                            } else {
-                                drawRect(
-                                    color = Color(0xFF1E293B),
-                                    topLeft = Offset(rect.left, rect.top),
-                                    size = Size(rect.width, rect.height)
-                                )
-                            }
-
-                            val cl = rect.left + cropSpec.leftNorm * rect.width
-                            val ct = rect.top + cropSpec.topNorm * rect.height
-                            val cr = rect.left + cropSpec.rightNorm * rect.width
-                            val cb = rect.top + cropSpec.bottomNorm * rect.height
+                            val w = size.width
+                            val h = size.height
+                            val cl = cropSpec.leftNorm * w
+                            val ct = cropSpec.topNorm * h
+                            val cr = cropSpec.rightNorm * w
+                            val cb = cropSpec.bottomNorm * h
                             val cw = (cr - cl).coerceAtLeast(1f)
                             val ch = (cb - ct).coerceAtLeast(1f)
 
                             // Máscara oscura exterior
                             val mask = Color(0xAA000000)
-                            drawRect(mask, Offset(rect.left, rect.top), Size(rect.width, ct - rect.top))
-                            drawRect(mask, Offset(rect.left, cb), Size(rect.width, rect.bottom - cb))
-                            drawRect(mask, Offset(rect.left, ct), Size(cl - rect.left, ch))
-                            drawRect(mask, Offset(cr, ct), Size(rect.right - cr, ch))
+                            drawRect(mask, Offset(0f, 0f), Size(w, ct))
+                            drawRect(mask, Offset(0f, cb), Size(w, (h - cb).coerceAtLeast(0f)))
+                            drawRect(mask, Offset(0f, ct), Size(cl, ch))
+                            drawRect(mask, Offset(cr, ct), Size((w - cr).coerceAtLeast(0f), ch))
 
                             // Cuadrícula 3x3
                             for (i in 1..2) {
@@ -268,7 +362,7 @@ fun VideoCropDialog(
                                 style = Stroke(width = 2.dp.toPx())
                             )
 
-                            // 8 Tiradores táctiles
+                            // 8 Tiradores táctiles grandes y visibles
                             val handles = listOf(
                                 Offset(cl, ct),
                                 Offset(cr, ct),
@@ -280,8 +374,8 @@ fun VideoCropDialog(
                                 Offset(cr, (ct + cb) / 2f)
                             )
                             handles.forEachIndexed { idx, pt ->
-                                val r = if (idx < 4) 7.5.dp.toPx() else 5.5.dp.toPx()
-                                drawCircle(Color(0xFF6366F1), r + 2.dp.toPx(), pt)
+                                val r = if (idx < 4) 8.5.dp.toPx() else 6.5.dp.toPx()
+                                drawCircle(Color(0xFF6366F1), r + 2.5.dp.toPx(), pt)
                                 drawCircle(Color.White, r, pt)
                             }
                         }
@@ -289,7 +383,6 @@ fun VideoCropDialog(
                 }
 
                 // Chips de proporción de aspecto
-                val videoAspect = ((frameBitmap?.width ?: 1280).toFloat() / (frameBitmap?.height ?: 720).toFloat().coerceAtLeast(1f))
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -314,18 +407,41 @@ fun VideoCropDialog(
                     }
                 }
 
-                // Acciones
+                // Acciones + Botón Reproducir/Pausar video
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    OutlinedButton(
-                        onClick = { cropSpec = VideoCropSpec() }
-                    ) {
-                        Icon(Icons.Default.RestartAlt, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("Original", color = Color.White)
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        FilledTonalButton(
+                            onClick = {
+                                val mp = mediaPlayer ?: return@FilledTonalButton
+                                if (isPlaying) {
+                                    runCatching { mp.pause() }
+                                    isPlaying = false
+                                } else {
+                                    runCatching { mp.start() }
+                                    isPlaying = true
+                                }
+                            }
+                        ) {
+                            Icon(
+                                imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(if (isPlaying) "Pausar" else "Video")
+                        }
+
+                        OutlinedButton(
+                            onClick = { cropSpec = VideoCropSpec() }
+                        ) {
+                            Icon(Icons.Default.RestartAlt, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Original", color = Color.White)
+                        }
                     }
 
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -333,7 +449,10 @@ fun VideoCropDialog(
                             Text(stringResource(R.string.btn_cancel), color = Color.White)
                         }
                         Button(
-                            onClick = { onApplyCrop(cropSpec) },
+                            onClick = {
+                                runCatching { mediaPlayer?.pause() }
+                                onApplyCrop(cropSpec)
+                            },
                             colors = ButtonDefaults.buttonColors(
                                 containerColor = Color(0xFF6366F1),
                                 contentColor = Color.White
@@ -350,34 +469,31 @@ fun VideoCropDialog(
     }
 }
 
-private fun computeVideoFrameRect(canvasW: Float, canvasH: Float, bmpW: Float, bmpH: Float): Rect {
-    val scale = min(canvasW / bmpW.coerceAtLeast(1f), canvasH / bmpH.coerceAtLeast(1f))
-    val dw = bmpW * scale
-    val dh = bmpH * scale
-    val l = (canvasW - dw) / 2f
-    val t = (canvasH - dh) / 2f
-    return Rect(l, t, l + dw, t + dh)
-}
-
-private fun hitTestVideoCropHandle(touch: Offset, rect: Rect, spec: VideoCropSpec): VideoCropHandle {
-    val cl = rect.left + spec.leftNorm * rect.width
-    val ct = rect.top + spec.topNorm * rect.height
-    val cr = rect.left + spec.rightNorm * rect.width
-    val cb = rect.top + spec.bottomNorm * rect.height
+private fun hitTestVideoCropHandleOnBox(
+    touch: Offset,
+    boxW: Float,
+    boxH: Float,
+    spec: VideoCropSpec,
+    hitRadiusPx: Double,
+    edgeTolerancePx: Float
+): VideoCropHandle {
+    val cl = spec.leftNorm * boxW
+    val ct = spec.topNorm * boxH
+    val cr = spec.rightNorm * boxW
+    val cb = spec.bottomNorm * boxH
     val mx = (cl + cr) / 2f
     val my = (ct + cb) / 2f
-    val hitR = 36.0
-    fun near(pt: Offset) = hypot((touch.x - pt.x).toDouble(), (touch.y - pt.y).toDouble()) <= hitR
+    fun near(pt: Offset) = hypot((touch.x - pt.x).toDouble(), (touch.y - pt.y).toDouble()) <= hitRadiusPx
 
     return when {
         near(Offset(cl, ct)) -> VideoCropHandle.TOP_LEFT
         near(Offset(cr, ct)) -> VideoCropHandle.TOP_RIGHT
         near(Offset(cl, cb)) -> VideoCropHandle.BOTTOM_LEFT
         near(Offset(cr, cb)) -> VideoCropHandle.BOTTOM_RIGHT
-        near(Offset(mx, ct)) || (touch.x in cl..cr && abs(touch.y - ct) <= 22f) -> VideoCropHandle.TOP_EDGE
-        near(Offset(mx, cb)) || (touch.x in cl..cr && abs(touch.y - cb) <= 22f) -> VideoCropHandle.BOTTOM_EDGE
-        near(Offset(cl, my)) || (touch.y in ct..cb && abs(touch.x - cl) <= 22f) -> VideoCropHandle.LEFT_EDGE
-        near(Offset(cr, my)) || (touch.y in ct..cb && abs(touch.x - cr) <= 22f) -> VideoCropHandle.RIGHT_EDGE
+        near(Offset(mx, ct)) || (touch.x in cl..cr && abs(touch.y - ct) <= edgeTolerancePx) -> VideoCropHandle.TOP_EDGE
+        near(Offset(mx, cb)) || (touch.x in cl..cr && abs(touch.y - cb) <= edgeTolerancePx) -> VideoCropHandle.BOTTOM_EDGE
+        near(Offset(cl, my)) || (touch.y in ct..cb && abs(touch.x - cl) <= edgeTolerancePx) -> VideoCropHandle.LEFT_EDGE
+        near(Offset(cr, my)) || (touch.y in ct..cb && abs(touch.x - cr) <= edgeTolerancePx) -> VideoCropHandle.RIGHT_EDGE
         touch.x in cl..cr && touch.y in ct..cb -> VideoCropHandle.INSIDE_MOVE
         else -> VideoCropHandle.NONE
     }

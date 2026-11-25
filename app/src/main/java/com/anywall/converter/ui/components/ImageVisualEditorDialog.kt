@@ -75,6 +75,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -1659,6 +1660,8 @@ private fun TouchStraightenDial(
     onDegreesChange: (Float) -> Unit,
     onResetDegrees: () -> Unit
 ) {
+    val currentDegrees by rememberUpdatedState(degrees)
+    val currentOnDegreesChange by rememberUpdatedState(onDegreesChange)
     Column(
         modifier = Modifier.fillMaxWidth(),
         horizontalAlignment = Alignment.CenterHorizontally
@@ -1687,11 +1690,11 @@ private fun TouchStraightenDial(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(34.dp)
-                .pointerInput(degrees) {
+                .pointerInput(Unit) {
                     detectDragGestures { change, dragAmount ->
                         change.consume()
                         val deltaDeg = -(dragAmount.x / size.width.coerceAtLeast(1)) * 55f
-                        onDegreesChange((degrees + deltaDeg).coerceIn(-45f, 45f))
+                        currentOnDegreesChange((currentDegrees + deltaDeg).coerceIn(-45f, 45f))
                     }
                 }
         ) {

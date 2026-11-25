@@ -110,7 +110,7 @@ fun SettingsDialog(
         title = {
             Column {
                 Text(
-                    text = if (isEn) "Settings • AnyWall v0.4" else "Ajustes • AnyWall v0.4",
+                    text = if (isEn) "Settings • AnyWall v0.5" else "Ajustes • AnyWall v0.5",
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.Bold
                 )

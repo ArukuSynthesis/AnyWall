@@ -176,36 +176,59 @@ fun OfflineToolsSheetDialog(
                         .fillMaxSize()
                         .padding(innerPadding)
                 ) {
-                    when (selectedTab) {
-                        0 -> ForensicMetadataAndHashTab(
-                            loadedInputs = loadedInputs,
-                            uriResolver = uriResolver,
-                            forensicHelper = forensicHelper
-                        )
-                        1 -> OfflineQrToolTab(
-                            uriResolver = uriResolver,
-                            storageManager = storageManager
-                        )
-                        2 -> LocalDiffToolTab(
-                            loadedInputs = loadedInputs,
-                            uriResolver = uriResolver,
-                            storageManager = storageManager
-                        )
-                        3 -> BeforeAfterComparisonTab(
-                            loadedInputs = loadedInputs,
-                            imageEditSpec = currentImageEditSpec,
-                            qualityPercent = currentQualityPercent,
-                            uriResolver = uriResolver
-                        )
-                        4 -> DuplicateFilesDetectorTab(
-                            loadedInputs = loadedInputs,
-                            uriResolver = uriResolver,
-                            onDeduplicateQueue = onDeduplicateQueue
-                        )
-                    }
+                    ToolsUtilityInlinePanel(
+                        selectedTab = selectedTab,
+                        loadedInputs = loadedInputs,
+                        currentImageEditSpec = currentImageEditSpec,
+                        currentQualityPercent = currentQualityPercent,
+                        uriResolver = uriResolver,
+                        storageManager = storageManager,
+                        forensicHelper = forensicHelper,
+                        onDeduplicateQueue = onDeduplicateQueue
+                    )
                 }
             }
         }
+    }
+}
+
+@Composable
+fun ToolsUtilityInlinePanel(
+    selectedTab: Int,
+    loadedInputs: List<InputFileItem>,
+    currentImageEditSpec: ImageEditSpec = ImageEditSpec(),
+    currentQualityPercent: Int = 85,
+    uriResolver: UriFileResolver,
+    storageManager: ScopedStorageManager,
+    forensicHelper: ForensicMetadataHelper,
+    onDeduplicateQueue: ((List<InputFileItem>) -> Unit)? = null
+) {
+    when (selectedTab) {
+        0 -> ForensicMetadataAndHashTab(
+            loadedInputs = loadedInputs,
+            uriResolver = uriResolver,
+            forensicHelper = forensicHelper
+        )
+        1 -> OfflineQrToolTab(
+            uriResolver = uriResolver,
+            storageManager = storageManager
+        )
+        2 -> LocalDiffToolTab(
+            loadedInputs = loadedInputs,
+            uriResolver = uriResolver,
+            storageManager = storageManager
+        )
+        3 -> BeforeAfterComparisonTab(
+            loadedInputs = loadedInputs,
+            imageEditSpec = currentImageEditSpec,
+            qualityPercent = currentQualityPercent,
+            uriResolver = uriResolver
+        )
+        4 -> DuplicateFilesDetectorTab(
+            loadedInputs = loadedInputs,
+            uriResolver = uriResolver,
+            onDeduplicateQueue = onDeduplicateQueue
+        )
     }
 }
 

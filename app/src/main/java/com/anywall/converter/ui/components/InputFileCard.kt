@@ -16,16 +16,15 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DragIndicator
-import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Visibility
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerInput
@@ -36,9 +35,12 @@ import com.anywall.converter.core.LocalThumbnailLoader
 import com.anywall.converter.domain.model.InputFileItem
 
 /**
- * Tarjeta que muestra un archivo cargado en el lote actual en `ConfigureScreen` (v0.4),
- * con reordenamiento táctil *Drag & Drop*, botón de Vista Previa Rápida (`QuickPeekDialog`),
- * miniatura local y controles para reordenar o quitar del lote.
+ * Tarjeta limpia de archivo en cola (`InputFileCard` - v0.5).
+ * Elimina el exceso de flechas repetitivas cuando hay Drag & Drop táctil, mostrando:
+ * - Tirador táctil de arrastre
+ * - Miniatura con toque directo para Vista Rápida (`QuickPeekDialog`)
+ * - Nombre del archivo + insignia coloreada de formato y peso
+ * - Botón rápido de vista previa y botón de quitar
  */
 @Composable
 fun InputFileCard(
@@ -56,41 +58,46 @@ fun InputFileCard(
     enabled: Boolean = true,
     modifier: Modifier = Modifier
 ) {
-    Card(
+    val catColor = categoryAccentColor(item.format.category)
+    val currentOnDragDeltaY by rememberUpdatedState(onDragDeltaY)
+    val currentOnDragEnd by rememberUpdatedState(onDragEnd)
+
+    Surface(
         modifier = modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(14.dp),
-        border = if (isBeingDragged) {
-            BorderStroke(2.dp, MaterialTheme.colorScheme.primary)
-        } else {
-            null
-        },
-        colors = CardDefaults.cardColors(
-            containerColor = if (isBeingDragged) {
-                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.65f)
+        shape = RoundedCornerShape(16.dp),
+        border = BorderStroke(
+            width = if (isBeingDragged) 2.dp else 1.dp,
+            color = if (isBeingDragged) {
+                MaterialTheme.colorScheme.primary
             } else {
-                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
+                MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.38f)
             }
-        )
+        ),
+        color = if (isBeingDragged) {
+            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
+        } else {
+            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
+        }
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 10.dp, vertical = 10.dp),
+                .padding(horizontal = 10.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             // Tirador táctil Drag & Drop cuando hay más de 1 archivo
             if (totalCount > 1 && onDragDeltaY != null) {
                 Box(
                     modifier = Modifier
-                        .size(width = 26.dp, height = 44.dp)
-                        .pointerInput(index, totalCount, enabled) {
+                        .size(width = 24.dp, height = 42.dp)
+                        .pointerInput(item.uri, enabled) {
                             if (!enabled) return@pointerInput
                             detectDragGestures(
-                                onDragEnd = { onDragEnd?.invoke() },
-                                onDragCancel = { onDragEnd?.invoke() },
+                                onDragEnd = { currentOnDragEnd?.invoke() },
+                                onDragCancel = { currentOnDragEnd?.invoke() },
                                 onDrag = { change, dragAmount ->
                                     change.consume()
-                                    onDragDeltaY(dragAmount.y)
+                                    currentOnDragDeltaY?.invoke(dragAmount.y)
                                 }
                             )
                         },
@@ -99,8 +106,8 @@ fun InputFileCard(
                     Icon(
                         imageVector = Icons.Default.DragIndicator,
                         contentDescription = "Arrastrar para reordenar ${item.displayName}",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(20.dp)
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                        modifier = Modifier.size(18.dp)
                     )
                 }
                 Spacer(modifier = Modifier.width(4.dp))
@@ -117,12 +124,12 @@ fun InputFileCard(
                     uri = item.uri,
                     format = item.format,
                     thumbnailLoader = thumbnailLoader,
-                    modifier = Modifier.size(width = 52.dp, height = 44.dp),
-                    cornerRadius = 10.dp
+                    modifier = Modifier.size(width = 48.dp, height = 44.dp),
+                    cornerRadius = 11.dp
                 )
             }
 
-            Spacer(modifier = Modifier.width(10.dp))
+            Spacer(modifier = Modifier.width(12.dp))
 
             Column(
                 modifier = Modifier
@@ -134,7 +141,7 @@ fun InputFileCard(
                             Modifier
                         }
                     ),
-                verticalArrangement = Arrangement.spacedBy(2.dp)
+                verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
                 Text(
                     text = item.displayName,
@@ -144,11 +151,28 @@ fun InputFileCard(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
-                Text(
-                    text = "#${index + 1} • ${item.format.category.displayNameEs} • ${item.format.label} • ${item.formattedSize}",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Surface(
+                        shape = RoundedCornerShape(6.dp),
+                        color = catColor.copy(alpha = 0.16f)
+                    ) {
+                        Text(
+                            text = item.format.label,
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = catColor,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp)
+                        )
+                    }
+                    Text(
+                        text = "${item.formattedSize}${if (totalCount > 1) " • #${index + 1}" else ""}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
 
             if (onQuickPeek != null) {
@@ -165,49 +189,16 @@ fun InputFileCard(
                 }
             }
 
-            if (totalCount > 1) {
-                IconButton(
-                    onClick = onMoveUp,
-                    enabled = enabled && index > 0,
-                    modifier = Modifier.size(32.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.KeyboardArrowUp,
-                        contentDescription = "Subir ${item.displayName}",
-                        tint = if (index > 0) {
-                            MaterialTheme.colorScheme.primary
-                        } else {
-                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f)
-                        }
-                    )
-                }
-
-                IconButton(
-                    onClick = onMoveDown,
-                    enabled = enabled && index < totalCount - 1,
-                    modifier = Modifier.size(32.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.KeyboardArrowDown,
-                        contentDescription = "Bajar ${item.displayName}",
-                        tint = if (index < totalCount - 1) {
-                            MaterialTheme.colorScheme.primary
-                        } else {
-                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f)
-                        }
-                    )
-                }
-            }
-
             IconButton(
                 onClick = onRemove,
                 enabled = enabled,
-                modifier = Modifier.size(34.dp)
+                modifier = Modifier.size(32.dp)
             ) {
                 Icon(
                     imageVector = Icons.Default.Close,
                     contentDescription = "Quitar ${item.displayName}",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(18.dp)
                 )
             }
         }

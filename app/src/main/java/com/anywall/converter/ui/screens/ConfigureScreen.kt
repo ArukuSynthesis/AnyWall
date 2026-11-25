@@ -3,8 +3,13 @@ package com.anywall.converter.ui.screens
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -20,6 +25,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -27,8 +33,8 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.RotateRight
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.AutoFixHigh
 import androidx.compose.material.icons.filled.BookmarkAdd
-import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.ContentCut
 import androidx.compose.material.icons.filled.CreateNewFolder
@@ -37,21 +43,22 @@ import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Draw
 import androidx.compose.material.icons.filled.DriveFileRenameOutline
 import androidx.compose.material.icons.filled.EditNote
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.FilterNone
 import androidx.compose.material.icons.filled.FolderZip
 import androidx.compose.material.icons.filled.GraphicEq
-import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.SortByAlpha
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.SwapVert
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
@@ -68,6 +75,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -77,9 +85,14 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.anywall.converter.core.LocalThumbnailLoader
 import com.anywall.converter.core.ScopedStorageManager
@@ -119,19 +132,20 @@ import com.anywall.converter.ui.components.ShareQuickActionType
 import com.anywall.converter.ui.components.SignaturePadDialog
 import com.anywall.converter.ui.components.SmartShareSheetDialog
 import com.anywall.converter.ui.components.VideoCropDialog
+import com.anywall.converter.ui.theme.CategoryArchiveColor
+import com.anywall.converter.ui.theme.CategoryDocumentColor
+import com.anywall.converter.ui.theme.CategoryImageColor
+import com.anywall.converter.ui.theme.CategoryMediaColor
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
 /**
- * `ConfigureScreen` (v0.4):
- * - Gestión de lotes múltiples con miniaturas, reordenamiento táctil *Drag & Drop*, vista previa rápida (`QuickPeekDialog`),
- *   estimador inteligente de tamaño de salida (`OutputSizeEstimator`), renombrador masivo (`BatchRenamerDialog`) y limpiador de duplicados `SHA-256`.
- * - Editores Visuales 100% Táctiles:
- *   1. `PdfVisualEditorDialog` + `SignaturePadDialog` (Drag & Drop de páginas, firma arrastrable/redimensionable, censura, texto, sello de fecha, resaltador y escáner 4 esquinas).
- *   2. `ImageVisualEditorDialog` (Estudio oscuro full-screen con 8 tiradores de recorte, dial de enderezado, escáner 4 esquinas con lupa 2.5×, ajustes 60 FPS, filtros con miniaturas reales, censura táctil y marca de agua interactiva).
- *   3. `ArchivePreviewDialog` (explorador de `.rar`/`.rar5`/`.cbr`/`.zip`/`.cbz`/`.7z`/`.tar*` con extracción selectiva y re-empaquetado en 1 paso).
- *   4. `MediaTimelineTrimmerDialog` y `VideoCropDialog` (tira de fotogramas, onda de audio PCM, captura de fotograma exacto y recorte de encuadre de video).
- *   5. `OfflineToolsSheetDialog` (Metadatos & SHA-256, Duplicados SHA-256, QR, Diff y Antes/Después).
+ * `ConfigureScreen` rediseñada en v0.5 con un flujo limpio de 3 pasos visibles:
+ * - **Paso 1 — Archivos en Cola:** Drag & Drop táctil, Quick Peek, orden rápido, renombrador masivo y deduplicación.
+ * - **Estudios Táctiles Contextuales Destacados:** aparecen tarjetas de acceso directo solo para los formatos presentes en el lote.
+ * - **Paso 2 — Formato Destino y Ajuste Esencial:** selector segmentado de formato, estimación de tamaño en vivo y control primario.
+ * - **Acordeones Colapsables de "Opciones Avanzadas":** cerrados por defecto para mantener la pantalla limpia, con contador de ajustes activos.
+ * - **Paso 3 — Barra Inferior Fija (*Sticky Bottom CTA*):** botón principal de conversión siempre accesible sin hacer scroll interminable.
  */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
@@ -216,26 +230,33 @@ fun ConfigureScreen(
     onNavigateToHistory: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val isRunning = state.activeJob.isRunning
     var showVisualPdfEditor by remember { mutableStateOf(false) }
-    var showVisualImageEditor by remember { mutableStateOf(false) }
     var showSignaturePad by remember { mutableStateOf(false) }
+    var showVisualImageEditor by remember { mutableStateOf(false) }
     var showArchivePreview by remember { mutableStateOf(false) }
-    var showToolsSheet by remember { mutableStateOf(false) }
+    var showToolsDialog by remember { mutableStateOf(false) }
+    var toolsInitialTab by remember { mutableIntStateOf(0) }
+    var showSavePresetDialog by remember { mutableStateOf(false) }
+    var newPresetName by remember { mutableStateOf("") }
+    var pendingCameraUri by remember { mutableStateOf<Uri?>(null) }
+
+    var quickPeekItem by remember { mutableStateOf<InputFileItem?>(null) }
     var showBatchRenamer by remember { mutableStateOf(false) }
     var showMediaTimelineTrimmer by remember { mutableStateOf(false) }
     var showVideoCropDialog by remember { mutableStateOf(false) }
-    var quickPeekItem by remember { mutableStateOf<InputFileItem?>(null) }
-    var deduplicateStatusBanner by remember { mutableStateOf<String?>(null) }
+    var duplicateRemovedMessage by remember { mutableStateOf<String?>(null) }
 
-    var draggingQueueIndex by remember { mutableIntStateOf(-1) }
-    var accumulatedDragY by remember { mutableFloatStateOf(0f) }
+    // Estado de acordeones colapsables de opciones avanzadas (cerrados por defecto en v0.5)
+    var expandFormatAdvanced by remember { mutableStateOf(false) }
+    var expandOutputAndPipeline by remember { mutableStateOf(false) }
+    var expandAudioId3Tags by remember { mutableStateOf(false) }
 
-    var showSavePresetDialog by remember { mutableStateOf(false) }
-    var newPresetName by remember { mutableStateOf("") }
-    var newPresetDesc by remember { mutableStateOf("") }
-    var pendingCameraUri by remember { mutableStateOf<Uri?>(null) }
+    // Estado Drag & Drop de la cola de archivos
+    var draggedIndex by remember { mutableIntStateOf(-1) }
+    var draggedAccumulatedY by remember { mutableFloatStateOf(0f) }
 
-    val addDocumentsLauncher = rememberLauncherForActivityResult(
+    val addFilesLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenMultipleDocuments()
     ) { uris ->
         if (uris.isNotEmpty()) {
@@ -253,9 +274,9 @@ fun ConfigureScreen(
 
     val cameraLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.TakePicture()
-    ) { ok ->
+    ) { success ->
         val uri = pendingCameraUri
-        if (ok && uri != null) {
+        if (success && uri != null) {
             onAddMoreFiles(listOf(uri))
         }
     }
@@ -269,7 +290,8 @@ fun ConfigureScreen(
         }
     }
 
-    // 1. Smart Share Sheet Dialog (ACTION_SEND / ACTION_SEND_MULTIPLE)
+    // ==================== DIÁLOGOS Y ESTUDIOS TÁCTILES ====================
+
     if (state.showSmartShareSheet && state.inputFiles.isNotEmpty()) {
         SmartShareSheetDialog(
             sharedItems = state.inputFiles,
@@ -344,29 +366,29 @@ fun ConfigureScreen(
         )
     }
 
-    // 2. Quick Peek Dialog (Vista Previa Rápida Universal)
     val peekTarget = quickPeekItem
     if (peekTarget != null) {
         QuickPeekDialog(
             item = peekTarget,
-            thumbnailLoader = thumbnailLoader,
             uriResolver = uriResolver,
+            thumbnailLoader = thumbnailLoader,
             archiveEngine = archiveEngine,
             onDismiss = { quickPeekItem = null }
         )
     }
 
-    // 3. Batch Renamer Dialog (Renombrado Masivo sin reconvertir)
-    if (showBatchRenamer) {
+    if (showBatchRenamer && state.inputFiles.isNotEmpty()) {
         BatchRenamerDialog(
             inputFiles = state.inputFiles,
             storageManager = storageManager,
-            onApplyRenamedItemsToQueue = onReplaceInputFilesList,
+            onApplyRenamedItemsToQueue = { renamedList ->
+                onReplaceInputFilesList(renamedList)
+                showBatchRenamer = false
+            },
             onDismiss = { showBatchRenamer = false }
         )
     }
 
-    // 4. Media Timeline Trimmer Dialog (Tira de fotogramas / Forma de onda PCM)
     val firstMediaFile = state.inputFiles.firstOrNull {
         it.format.isVideo || it.format.isAudio
     }
@@ -383,7 +405,6 @@ fun ConfigureScreen(
         )
     }
 
-    // 5. Video Crop Dialog (Recorte táctil de encuadre de video)
     val firstVideoFile = state.inputFiles.firstOrNull { it.format.isVideo }
     if (showVideoCropDialog && firstVideoFile != null) {
         VideoCropDialog(
@@ -399,26 +420,21 @@ fun ConfigureScreen(
     }
 
     if (showVisualPdfEditor) {
+        val pdfFiles = state.inputFiles.filter { it.format == SupportedFormat.PDF }
         PdfVisualEditorDialog(
-            pdfInputFiles = state.inputFiles,
+            pdfInputFiles = pdfFiles,
             initialEdits = state.visualPdfEditsList,
             thumbnailLoader = thumbnailLoader,
             onOpenSignaturePad = { showSignaturePad = true },
-            onApplyEdits = onApplyVisualPdfEdits,
-            onResetEdits = onClearVisualPdfEdits,
-            onDismiss = { showVisualPdfEditor = false }
-        )
-    }
-
-    if (showVisualImageEditor) {
-        ImageVisualEditorDialog(
-            imageInputs = state.inputFiles.filter { it.format.category == FormatCategory.IMAGE },
-            initialEditSpec = state.options.imageEditSpec,
-            onApplyEdits = { spec ->
-                onApplyVisualImageEdits(spec)
-                showVisualImageEditor = false
+            onApplyEdits = { edits ->
+                onApplyVisualPdfEdits(edits)
+                showVisualPdfEditor = false
             },
-            onDismiss = { showVisualImageEditor = false }
+            onResetEdits = {
+                onClearVisualPdfEdits()
+                showVisualPdfEditor = false
+            },
+            onDismiss = { showVisualPdfEditor = false }
         )
     }
 
@@ -436,14 +452,25 @@ fun ConfigureScreen(
         )
     }
 
-    if (showArchivePreview && state.inputFiles.isNotEmpty()) {
-        val archiveTarget = state.inputFiles.firstOrNull {
-            it.format.category == FormatCategory.ARCHIVE ||
-                it.format == SupportedFormat.CBZ ||
-                it.format == SupportedFormat.CBR
-        } ?: state.inputFiles.first()
+    if (showVisualImageEditor) {
+        val imageFiles = state.inputFiles.filter { it.format.category == FormatCategory.IMAGE }
+        ImageVisualEditorDialog(
+            imageInputs = imageFiles,
+            initialEditSpec = state.options.imageEditSpec,
+            onApplyEdits = { spec ->
+                onApplyVisualImageEdits(spec)
+                showVisualImageEditor = false
+            },
+            onDismiss = { showVisualImageEditor = false }
+        )
+    }
+
+    val firstArchive = state.inputFiles.firstOrNull {
+        it.format.category == FormatCategory.ARCHIVE && it.format != SupportedFormat.FILE_PARTS
+    }
+    if (showArchivePreview && firstArchive != null) {
         ArchivePreviewDialog(
-            archiveItem = archiveTarget,
+            archiveItem = firstArchive,
             archiveEngine = archiveEngine,
             initialSelectedEntries = state.options.selectedArchiveEntries,
             initialPassword = state.options.archivePassword,
@@ -452,10 +479,10 @@ fun ConfigureScreen(
                 showArchivePreview = false
             },
             onUpdateArchivePassword = onUpdateArchivePassword,
-            onRepackInOneStep = { targetFmt, selectedEntries, password ->
+            onRepackInOneStep = { targetRepackFormat, entries, password ->
+                onUpdateSelectedArchiveEntries(entries)
                 onUpdateArchivePassword(password)
-                onUpdateSelectedArchiveEntries(selectedEntries)
-                onSelectTargetFormat(targetFmt)
+                onSelectTargetFormat(targetRepackFormat)
                 showArchivePreview = false
                 onStartConversion()
             },
@@ -463,9 +490,9 @@ fun ConfigureScreen(
         )
     }
 
-    if (showToolsSheet) {
+    if (showToolsDialog) {
         OfflineToolsSheetDialog(
-            initialTabIndex = 0,
+            initialTabIndex = toolsInitialTab,
             loadedInputs = state.inputFiles,
             currentImageEditSpec = state.options.imageEditSpec,
             currentQualityPercent = state.options.clampedQuality,
@@ -473,39 +500,40 @@ fun ConfigureScreen(
             storageManager = storageManager,
             forensicHelper = forensicHelper,
             onDeduplicateQueue = onReplaceInputFilesList,
-            onDismiss = { showToolsSheet = false }
+            onDismiss = { showToolsDialog = false }
         )
     }
 
     if (showSavePresetDialog) {
         AlertDialog(
             onDismissRequest = { showSavePresetDialog = false },
-            title = { Text("Guardar Perfil / Preset Rápido", fontWeight = FontWeight.Bold) },
+            title = { Text("Guardar Perfil Rápido (Preset)", fontWeight = FontWeight.Bold) },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "Guarda el formato destino (${state.selectedTargetFormat?.label ?: ""}) y las opciones actuales para reutilizarlos con un toque:",
+                        style = MaterialTheme.typography.bodySmall
+                    )
                     OutlinedTextField(
                         value = newPresetName,
                         onValueChange = { newPresetName = it },
                         singleLine = true,
-                        label = { Text("Nombre del preset") },
-                        placeholder = { Text("Ej. Mi PDF Firmado") }
-                    )
-                    OutlinedTextField(
-                        value = newPresetDesc,
-                        onValueChange = { newPresetDesc = it },
-                        singleLine = true,
-                        label = { Text("Descripción corta (opcional)") }
+                        label = { Text("Nombre del perfil (ej. WebP 80% sin EXIF)") },
+                        modifier = Modifier.fillMaxWidth()
                     )
                 }
             },
             confirmButton = {
                 Button(
-                    enabled = newPresetName.isNotBlank(),
                     onClick = {
-                        onSaveNewPreset(newPresetName, newPresetDesc)
-                        newPresetName = ""
-                        newPresetDesc = ""
-                        showSavePresetDialog = false
+                        if (newPresetName.isNotBlank()) {
+                            onSaveNewPreset(
+                                newPresetName.trim(),
+                                "Destino: ${state.selectedTargetFormat?.label ?: ""}"
+                            )
+                            newPresetName = ""
+                            showSavePresetDialog = false
+                        }
                     }
                 ) {
                     Text("Guardar")
@@ -519,18 +547,14 @@ fun ConfigureScreen(
         )
     }
 
-    val isRunning = state.activeJob.isRunning
-    val requiresPdfPassword = state.selectedTargetFormat == SupportedFormat.PDF &&
-        state.options.pdfActionMode == PdfActionMode.PROTECT_PASSWORD &&
-        state.options.pdfPassword.isBlank()
-    val requiresVaultPassword = state.showVaultPasswordField &&
-        state.options.vaultPassword.isBlank() &&
-        state.options.pdfPassword.isBlank()
-    val canConvert = state.inputFiles.isNotEmpty() &&
-        state.selectedTargetFormat != null &&
-        !isRunning &&
-        !requiresPdfPassword &&
-        !requiresVaultPassword
+    // ==================== ESTRUCTURA PRINCIPAL v0.5 ====================
+
+    val allVaultsInQueue = state.inputFiles.isNotEmpty() && state.inputFiles.all { it.format == SupportedFormat.ANYWALL_VAULT }
+    val hasImagesInQueue = state.inputFiles.any { it.format.category == FormatCategory.IMAGE }
+    val hasPdfsInQueue = state.inputFiles.any { it.format == SupportedFormat.PDF }
+    val hasVideosInQueue = state.inputFiles.any { it.format.isVideo }
+    val hasMediaInQueue = state.inputFiles.any { it.format.isVideo || it.format.isAudio }
+    val hasArchivesInQueue = firstArchive != null
 
     Scaffold(
         modifier = modifier.fillMaxSize(),
@@ -539,357 +563,238 @@ fun ConfigureScreen(
                 title = {
                     Column {
                         Text(
-                            text = "Configurar Conversión",
+                            text = "Configurar Lote",
                             style = MaterialTheme.typography.titleLarge,
-                            fontWeight = FontWeight.Bold
+                            fontWeight = FontWeight.ExtraBold
                         )
-                        val est = state.outputSizeEstimate
-                        val subtitle = if (est != null) {
-                            "${state.inputFiles.size} ${if (state.inputFiles.size == 1) "archivo" else "archivos"} • ${state.formattedTotalInputSize} → ${est.formattedRange}"
-                        } else {
-                            "${state.inputFiles.size} ${if (state.inputFiles.size == 1) "archivo" else "archivos"} • ${state.formattedTotalInputSize}"
+                        if (state.inputFiles.isNotEmpty()) {
+                            Text(
+                                text = "${state.inputFiles.size} archivo(s) • ${state.formattedTotalInputSize}",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.primary
+                            )
                         }
-                        Text(
-                            text = subtitle,
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
                     }
                 },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {
                         Icon(
                             imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = "Volver a Inicio"
+                            contentDescription = "Volver"
                         )
                     }
                 },
                 actions = {
-                    IconButton(onClick = { showToolsSheet = true }) {
+                    IconButton(
+                        onClick = { addFilesLauncher.launch(arrayOf("*/*")) },
+                        enabled = !isRunning
+                    ) {
                         Icon(
-                            imageVector = Icons.Default.Build,
-                            contentDescription = "Herramientas (Metadatos, SHA-256, Duplicados, QR, Diff, Slider)"
+                            imageVector = Icons.Default.Add,
+                            contentDescription = "Añadir archivos"
                         )
                     }
-                    IconButton(onClick = onNavigateToHistory) {
+                    IconButton(
+                        onClick = { addFolderLauncher.launch(null) },
+                        enabled = !isRunning
+                    ) {
                         Icon(
-                            imageVector = Icons.Default.History,
-                            contentDescription = "Ver Historial"
+                            imageVector = Icons.Default.CreateNewFolder,
+                            contentDescription = "Añadir carpeta"
                         )
                     }
-                }
+                    IconButton(
+                        onClick = {
+                            val uri = onCreateCameraUri()
+                            pendingCameraUri = uri
+                            cameraLauncher.launch(uri)
+                        },
+                        enabled = !isRunning
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.CameraAlt,
+                            contentDescription = "Capturar foto"
+                        )
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.background
+                )
             )
         },
         bottomBar = {
-            Surface(
-                tonalElevation = 6.dp,
-                shadowElevation = 8.dp
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Button(
-                        onClick = onStartConversion,
-                        enabled = canConvert,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(54.dp),
-                        shape = RoundedCornerShape(16.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.PlayArrow,
-                            contentDescription = null,
-                            modifier = Modifier.size(22.dp)
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        val targetLabel = state.selectedTargetFormat?.label ?: ""
-                        Text(
-                            text = when {
-                                requiresPdfPassword -> "Introduce una contraseña para proteger el PDF"
-                                requiresVaultPassword -> "Introduce la contraseña de la Bóveda AES-256"
-                                targetLabel.isNotEmpty() -> "Convertir Ahora a $targetLabel"
-                                else -> "Convertir Ahora"
-                            },
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-                }
+            if (state.inputFiles.isNotEmpty() && !isRunning) {
+                StickyConversionBottomBar(
+                    inputCount = state.inputFiles.size,
+                    selectedFormat = state.selectedTargetFormat,
+                    isDecryptingVault = allVaultsInQueue,
+                    estimateRange = state.outputSizeEstimate?.formattedRange,
+                    estimateSavingsBadge = state.outputSizeEstimate?.formattedSavingsBadge,
+                    onSavePreset = { showSavePresetDialog = true },
+                    onStartConversion = onStartConversion
+                )
             }
         }
     ) { innerPadding ->
-        LazyColumn(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding),
-            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
-        ) {
-            if (state.activeJob.isRunning ||
-                state.activeJob.isCompleted ||
-                state.activeJob.isFailed
+        if (state.inputFiles.isEmpty()) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding)
+                    .padding(24.dp),
+                verticalArrangement = Arrangement.Center,
+                horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                item {
-                    ConversionProgressCard(
-                        jobState = state.activeJob,
-                        onCancel = onCancelConversion,
-                        onOpenHistory = onNavigateToHistory
-                    )
+                Text(
+                    text = "No hay archivos en el lote actual",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                Button(
+                    onClick = { addFilesLauncher.launch(arrayOf("*/*")) },
+                    shape = RoundedCornerShape(14.dp)
+                ) {
+                    Icon(Icons.Default.Add, contentDescription = null)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Seleccionar Archivos")
                 }
             }
+        } else {
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding),
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
+                // Progreso activo si se está ejecutando una tarea
+                if (state.activeJob.isRunning) {
+                    item {
+                        ConversionProgressCard(
+                            jobState = state.activeJob,
+                            onCancel = onCancelConversion,
+                            onOpenHistory = onNavigateToHistory
+                        )
+                    }
+                }
 
-            // Barra de Perfiles / Presets Rápidos (v0.3)
-            if (presets.isNotEmpty()) {
+                // ==================== PASO 1: COLA DE ARCHIVOS ====================
+                item {
+                    StepHeaderRow(
+                        stepNumber = "1",
+                        title = "Archivos en Cola (${state.inputFiles.size})",
+                        trailingContent = {
+                            TextButton(
+                                onClick = onClearAllFiles,
+                                enabled = !isRunning
+                            ) {
+                                Text("Vaciar")
+                            }
+                        }
+                    )
+                }
+
+                // Barra horizontal compacta de herramientas de cola
                 item {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
                             .horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        AssistChip(
-                            onClick = { showSavePresetDialog = true },
-                            enabled = !isRunning,
-                            label = { Text("+ Guardar Preset", fontWeight = FontWeight.Bold) },
-                            leadingIcon = {
-                                Icon(Icons.Default.BookmarkAdd, contentDescription = null, modifier = Modifier.size(16.dp))
-                            }
-                        )
-                        presets.forEach { preset ->
+                        if (state.inputFiles.size > 1) {
                             AssistChip(
-                                onClick = { onApplyPreset(preset) },
+                                onClick = onSortByName,
                                 enabled = !isRunning,
-                                label = { Text(preset.name) },
+                                shape = RoundedCornerShape(10.dp),
+                                label = { Text("A–Z") },
                                 leadingIcon = {
-                                    Icon(
-                                        imageVector = Icons.Default.AutoAwesome,
-                                        contentDescription = null,
-                                        tint = MaterialTheme.colorScheme.primary,
-                                        modifier = Modifier.size(15.dp)
-                                    )
+                                    Icon(Icons.Default.SortByAlpha, contentDescription = null, modifier = Modifier.size(15.dp))
                                 }
                             )
-                        }
-                    }
-                }
-            }
-
-            item {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "Archivos en el Lote (${state.inputFiles.size})",
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.Bold
+                            AssistChip(
+                                onClick = onSortBySize,
+                                enabled = !isRunning,
+                                shape = RoundedCornerShape(10.dp),
+                                label = { Text("Tamaño") },
+                                leadingIcon = {
+                                    Icon(Icons.Default.Storage, contentDescription = null, modifier = Modifier.size(15.dp))
+                                }
                             )
-                            Text(
-                                text = "Arrastra ≡ para reordenar o toca un archivo para vista previa rápida",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            AssistChip(
+                                onClick = onReverseOrder,
+                                enabled = !isRunning,
+                                shape = RoundedCornerShape(10.dp),
+                                label = { Text("Invertir") },
+                                leadingIcon = {
+                                    Icon(Icons.Default.SwapVert, contentDescription = null, modifier = Modifier.size(15.dp))
+                                }
                             )
-                        }
-
-                        Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                            OutlinedButton(
-                                onClick = { addDocumentsLauncher.launch(arrayOf("*/*")) },
-                                enabled = !isRunning
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Add,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text("Archivos")
-                            }
-
-                            IconButton(
-                                onClick = { addFolderLauncher.launch(null) },
-                                enabled = !isRunning
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.CreateNewFolder,
-                                    contentDescription = "Añadir carpeta completa",
-                                    tint = MaterialTheme.colorScheme.primary
-                                )
-                            }
-
-                            IconButton(
+                            AssistChip(
                                 onClick = {
-                                    val uri = onCreateCameraUri()
-                                    pendingCameraUri = uri
-                                    cameraLauncher.launch(uri)
-                                },
-                                enabled = !isRunning
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.CameraAlt,
-                                    contentDescription = "Capturar desde cámara",
-                                    tint = MaterialTheme.colorScheme.primary
-                                )
-                            }
-
-                            if (state.inputFiles.isNotEmpty()) {
-                                IconButton(
-                                    onClick = onClearAllFiles,
-                                    enabled = !isRunning
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.DeleteSweep,
-                                        contentDescription = "Quitar todos los archivos",
-                                        tint = MaterialTheme.colorScheme.error
-                                    )
-                                }
-                            }
-                        }
-                    }
-
-                    if (state.inputFiles.isNotEmpty()) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .horizontalScroll(rememberScrollState()),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            AssistChip(
-                                onClick = { showBatchRenamer = true },
-                                enabled = !isRunning,
-                                label = { Text("Renombrado Masivo") },
-                                leadingIcon = {
-                                    Icon(
-                                        imageVector = Icons.Default.DriveFileRenameOutline,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(16.dp)
-                                    )
-                                }
-                            )
-                            if (state.inputFiles.size > 1) {
-                                AssistChip(
-                                    onClick = {
-                                        onDeduplicateQueue { removedCount ->
-                                            deduplicateStatusBanner = if (removedCount > 0) {
-                                                "Se limpiaron $removedCount archivos duplicados (SHA-256)."
-                                            } else {
-                                                "✓ 0 duplicados detectados por tamaño + SHA-256."
-                                            }
+                                    onDeduplicateQueue { removedCount ->
+                                        duplicateRemovedMessage = if (removedCount > 0) {
+                                            "Se eliminaron $removedCount duplicado(s) por SHA-256."
+                                        } else {
+                                            "No se encontraron archivos duplicados."
                                         }
-                                    },
-                                    enabled = !isRunning,
-                                    label = { Text("Limpiar Duplicados SHA-256") },
-                                    leadingIcon = {
-                                        Icon(
-                                            imageVector = Icons.Default.FilterNone,
-                                            contentDescription = null,
-                                            modifier = Modifier.size(16.dp)
-                                        )
                                     }
-                                )
-                                AssistChip(
-                                    onClick = onSortByName,
-                                    enabled = !isRunning,
-                                    label = { Text("Ordenar Nombre (A–Z)") },
-                                    leadingIcon = {
-                                        Icon(
-                                            imageVector = Icons.Default.SortByAlpha,
-                                            contentDescription = null,
-                                            modifier = Modifier.size(16.dp)
-                                        )
-                                    }
-                                )
-                                AssistChip(
-                                    onClick = onSortBySize,
-                                    enabled = !isRunning,
-                                    label = { Text("Ordenar por Tamaño") },
-                                    leadingIcon = {
-                                        Icon(
-                                            imageVector = Icons.Default.Storage,
-                                            contentDescription = null,
-                                            modifier = Modifier.size(16.dp)
-                                        )
-                                    }
-                                )
-                                AssistChip(
-                                    onClick = onReverseOrder,
-                                    enabled = !isRunning,
-                                    label = { Text("Invertir Orden") },
-                                    leadingIcon = {
-                                        Icon(
-                                            imageVector = Icons.Default.SwapVert,
-                                            contentDescription = null,
-                                            modifier = Modifier.size(16.dp)
-                                        )
-                                    }
-                                )
-                            }
+                                },
+                                enabled = !isRunning,
+                                shape = RoundedCornerShape(10.dp),
+                                label = { Text("Sin duplicados") },
+                                leadingIcon = {
+                                    Icon(Icons.Default.DeleteSweep, contentDescription = null, modifier = Modifier.size(15.dp))
+                                }
+                            )
                         }
-                    }
-
-                    if (deduplicateStatusBanner != null) {
-                        Text(
-                            text = deduplicateStatusBanner.orEmpty(),
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.primary,
-                            fontWeight = FontWeight.Bold
+                        AssistChip(
+                            onClick = { showBatchRenamer = true },
+                            enabled = !isRunning,
+                            shape = RoundedCornerShape(10.dp),
+                            label = { Text("Renombrar lote") },
+                            leadingIcon = {
+                                Icon(Icons.Default.DriveFileRenameOutline, contentDescription = null, modifier = Modifier.size(15.dp))
+                            }
                         )
                     }
                 }
-            }
 
-            if (state.inputFiles.isEmpty()) {
-                item {
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(18.dp),
-                        colors = CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
-                        )
-                    ) {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(20.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally
+                if (duplicateRemovedMessage != null) {
+                    item {
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.7f),
+                            modifier = Modifier.fillMaxWidth()
                         ) {
-                            Text(
-                                text = "No hay archivos cargados en el lote",
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.Bold
-                            )
-                            Spacer(modifier = Modifier.height(6.dp))
-                            Text(
-                                text = "Añade archivos, importa una carpeta o captura un documento con la cámara.",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            Spacer(modifier = Modifier.height(12.dp))
-                            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                                Button(onClick = { addDocumentsLauncher.launch(arrayOf("*/*")) }) {
-                                    Icon(imageVector = Icons.Default.Add, contentDescription = null)
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text("Archivos")
-                                }
-                                OutlinedButton(onClick = { addFolderLauncher.launch(null) }) {
-                                    Icon(imageVector = Icons.Default.CreateNewFolder, contentDescription = null)
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text("Carpeta")
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = duplicateRemovedMessage.orEmpty(),
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                TextButton(onClick = { duplicateRemovedMessage = null }) {
+                                    Text("OK")
                                 }
                             }
                         }
                     }
                 }
-            } else {
+
+                // Lista de tarjetas de archivos con Drag & Drop
                 itemsIndexed(
                     items = state.inputFiles,
-                    key = { _, item -> item.uri.toString() }
+                    key = { index, item -> "${item.uri}_$index" }
                 ) { index, fileItem ->
                     InputFileCard(
                         item = fileItem,
@@ -900,251 +805,173 @@ fun ConfigureScreen(
                         onMoveDown = { onMoveFileDown(index) },
                         onRemove = { onRemoveFile(fileItem.uri) },
                         onQuickPeek = { quickPeekItem = fileItem },
-                        isBeingDragged = draggingQueueIndex == index,
                         onDragDeltaY = { dy ->
-                            if (draggingQueueIndex != index) {
-                                draggingQueueIndex = index
-                                accumulatedDragY = 0f
+                            if (draggedIndex == -1) {
+                                draggedIndex = index
+                                draggedAccumulatedY = 0f
                             }
-                            accumulatedDragY += dy
-                            val rowThresholdPx = 115f
-                            if (accumulatedDragY > rowThresholdPx && index + 1 < state.inputFiles.size) {
-                                onMoveFile(index, index + 1)
-                                draggingQueueIndex = index + 1
-                                accumulatedDragY = 0f
-                            } else if (accumulatedDragY < -rowThresholdPx && index - 1 >= 0) {
-                                onMoveFile(index, index - 1)
-                                draggingQueueIndex = index - 1
-                                accumulatedDragY = 0f
+                            draggedAccumulatedY += dy
+                            val thresholdPx = 95f
+                            val curIdx = if (draggedIndex in state.inputFiles.indices) draggedIndex else index
+                            if (draggedAccumulatedY > thresholdPx && curIdx < state.inputFiles.lastIndex) {
+                                onMoveFile(curIdx, curIdx + 1)
+                                draggedIndex = curIdx + 1
+                                draggedAccumulatedY = 0f
+                            } else if (draggedAccumulatedY < -thresholdPx && curIdx > 0) {
+                                onMoveFile(curIdx, curIdx - 1)
+                                draggedIndex = curIdx - 1
+                                draggedAccumulatedY = 0f
                             }
                         },
                         onDragEnd = {
-                            draggingQueueIndex = -1
-                            accumulatedDragY = 0f
+                            draggedIndex = -1
+                            draggedAccumulatedY = 0f
                         },
+                        isBeingDragged = (draggedIndex == index),
                         enabled = !isRunning
                     )
                 }
 
-                // 1. Tarjeta destacada: Editor PDF Táctil y Anotaciones (v0.4)
-                if (state.showVisualPdfEditorButton) {
+                // ==================== ESTUDIOS TÁCTILES CONTEXTUALES DESTACADOS ====================
+                if (hasImagesInQueue || hasPdfsInQueue || hasMediaInQueue || hasArchivesInQueue) {
                     item {
-                        Card(
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(20.dp),
-                            colors = CardDefaults.cardColors(
-                                containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text(
+                                text = "Estudios Táctiles para tu Lote",
+                                style = MaterialTheme.typography.labelLarge,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = MaterialTheme.colorScheme.primary
                             )
-                        ) {
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(16.dp),
-                                verticalArrangement = Arrangement.spacedBy(10.dp)
-                            ) {
-                                val activeVisualEdits = state.visualPdfEditsList
-                                val activeCount = activeVisualEdits.count { it.included }
-                                Text(
-                                    text = "Editor Visual Táctil de PDF y Anotaciones",
-                                    style = MaterialTheme.typography.titleMedium,
-                                    fontWeight = FontWeight.ExtraBold,
-                                    color = MaterialTheme.colorScheme.onPrimaryContainer
-                                )
-                                Text(
-                                    text = if (activeVisualEdits.isNotEmpty()) {
-                                        "Edición visual activa: $activeCount de ${activeVisualEdits.size} páginas seleccionadas (Drag & Drop, rotación, censura, anotaciones y firma)."
-                                    } else {
-                                        "Reordena páginas con Drag & Drop, haz pinch-to-zoom para colocar tu firma manuscrita, trazar censuras, resaltar en amarillo, añadir sellos de fecha o rectificar perspectiva de 4 esquinas."
-                                    },
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.9f)
-                                )
 
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                                ) {
-                                    FilledTonalButton(
-                                        onClick = { showVisualPdfEditor = true },
-                                        enabled = !isRunning,
-                                        modifier = Modifier.weight(1f)
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Default.EditNote,
-                                            contentDescription = null,
-                                            modifier = Modifier.size(20.dp)
-                                        )
-                                        Spacer(modifier = Modifier.width(8.dp))
-                                        Text(
-                                            text = if (activeVisualEdits.isNotEmpty()) {
-                                                "Editar Vista Previa PDF ($activeCount págs.)"
-                                            } else {
-                                                "Abrir Editor Táctil PDF"
-                                            },
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                    }
-
-                                    if (activeVisualEdits.isNotEmpty()) {
-                                        OutlinedButton(
-                                            onClick = onClearVisualPdfEdits,
-                                            enabled = !isRunning
-                                        ) {
-                                            Text("Restablecer")
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // 2. Tarjeta destacada: Estudio de Fotos Moderno 100% Táctil (v0.4)
-                if (state.showVisualImageEditorButton) {
-                    item {
-                        Card(
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(20.dp),
-                            colors = CardDefaults.cardColors(
-                                containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.55f)
-                            )
-                        ) {
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(16.dp),
-                                verticalArrangement = Arrangement.spacedBy(10.dp)
-                            ) {
-                                Text(
-                                    text = "Estudio de Fotos 100% Táctil (Recorte, Escáner 4-Esq, 60 FPS y Censura)",
-                                    style = MaterialTheme.typography.titleMedium,
-                                    fontWeight = FontWeight.ExtraBold,
-                                    color = MaterialTheme.colorScheme.onSecondaryContainer
-                                )
-                                Text(
-                                    text = if (state.options.hasVisualImageEdits) {
-                                        "Edición visual activa (recorte gestual, enderezado, escáner 4 esquinas, ajustes de color, filtros, censura o texto)."
-                                    } else {
-                                        "Recorta con 8 tiradores táctiles y dial de enderezado, corrige perspectiva con lupa 2.5×, ajusta exposición/temperatura/viñeta en vivo, censura con el dedo o añade texto multitáctil."
-                                    },
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.9f)
-                                )
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                                ) {
-                                    FilledTonalButton(
-                                        onClick = { showVisualImageEditor = true },
-                                        enabled = !isRunning,
-                                        modifier = Modifier.weight(1f)
-                                    ) {
-                                        Icon(Icons.Default.Image, contentDescription = null, modifier = Modifier.size(18.dp))
-                                        Spacer(modifier = Modifier.width(8.dp))
-                                        Text(
-                                            text = if (state.options.hasVisualImageEdits) "Modificar Estudio de Fotos" else "Abrir Estudio de Fotos Táctil",
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                    }
-                                    if (state.options.hasVisualImageEdits) {
-                                        OutlinedButton(
-                                            onClick = onClearVisualImageEdits,
-                                            enabled = !isRunning
-                                        ) {
-                                            Text("Restablecer")
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // 3. Tarjeta destacada: Explorador de Archivos Comprimidos (.rar/.rar5/.zip/.7z/.tar*) y Re-empaquetado en 1 Paso (v0.4)
-                if (state.showArchivePreviewButton) {
-                    item {
-                        Card(
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(20.dp),
-                            colors = CardDefaults.cardColors(
-                                containerColor = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.55f)
-                            )
-                        ) {
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(16.dp),
-                                verticalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                val selectedCount = state.options.selectedArchiveEntries.size
-                                Text(
-                                    text = "Explorador de Archivos Comprimidos y Re-empaquetado en 1 Paso",
-                                    style = MaterialTheme.typography.titleMedium,
-                                    fontWeight = FontWeight.ExtraBold
-                                )
-                                Text(
-                                    text = if (selectedCount > 0) {
-                                        "Extracción selectiva activa: se procesarán únicamente $selectedCount elementos seleccionados."
-                                    } else {
-                                        "Explora archivos .rar / .rar5 / .cbr (con soporte de contraseña y multivolumen), .zip, .cbz, .7z y .tar* para extraer selectivamente o re-empaquetar en 1 paso."
-                                    },
-                                    style = MaterialTheme.typography.bodyMedium
-                                )
-                                FilledTonalButton(
-                                    onClick = { showArchivePreview = true },
+                            if (hasImagesInQueue) {
+                                val hasEdits = state.options.hasVisualImageEdits
+                                ContextualStudioBannerCard(
+                                    title = if (hasEdits) "✓ Estudio de Fotos Táctil Aplicado" else "Abrir Estudio de Fotos Táctil",
+                                    subtitle = "Recorte 8 tiradores, escáner 4 esquinas, ajustes 60 FPS, filtros, censura y marca de agua",
+                                    icon = Icons.Default.AutoFixHigh,
+                                    accentColor = CategoryImageColor,
+                                    isActive = hasEdits,
+                                    onClick = { showVisualImageEditor = true },
+                                    onReset = if (hasEdits) onClearVisualImageEdits else null,
                                     enabled = !isRunning
+                                )
+                            }
+
+                            if (hasPdfsInQueue) {
+                                val hasPdfEdits = state.options.hasVisualPdfEdits
+                                ContextualStudioBannerCard(
+                                    title = if (hasPdfEdits) {
+                                        "✓ Estudio PDF Aplicado (${state.activeVisualPdfPagesCount} págs.)"
+                                    } else {
+                                        "Abrir Estudio PDF, Firma y Anotaciones"
+                                    },
+                                    subtitle = "Reordenar páginas, firma manuscrita, resaltador, sello de fecha, censura y escáner",
+                                    icon = Icons.Default.EditNote,
+                                    accentColor = CategoryDocumentColor,
+                                    isActive = hasPdfEdits,
+                                    onClick = { showVisualPdfEditor = true },
+                                    onReset = if (hasPdfEdits) onClearVisualPdfEdits else null,
+                                    enabled = !isRunning
+                                )
+                            }
+
+                            if (hasMediaInQueue) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                                 ) {
-                                    Icon(Icons.Default.FolderZip, contentDescription = null, modifier = Modifier.size(18.dp))
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text("Explorar Contenido / Re-empaquetar")
+                                    val hasTrim = state.options.trimStartMillis > 0L || state.options.trimEndMillis > 0L
+                                    ContextualStudioBannerCard(
+                                        title = if (hasTrim) "✓ Tramo Recortado" else "Línea de Tiempo (Trim)",
+                                        subtitle = "Fotogramas / onda PCM",
+                                        icon = Icons.Default.ContentCut,
+                                        accentColor = CategoryMediaColor,
+                                        isActive = hasTrim,
+                                        onClick = { showMediaTimelineTrimmer = true },
+                                        onReset = if (hasTrim) ({ onUpdateTrimRangeMillis(0L, 0L) }) else null,
+                                        enabled = !isRunning,
+                                        modifier = Modifier.weight(1f)
+                                    )
+
+                                    if (hasVideosInQueue) {
+                                        val hasCrop = state.options.videoCropSpec.hasCrop
+                                        ContextualStudioBannerCard(
+                                            title = if (hasCrop) "✓ Encuadre Recortado" else "Encuadre (Crop)",
+                                            subtitle = "Proporciones 1:1, 9:16, 16:9",
+                                            icon = Icons.Default.Crop,
+                                            accentColor = Color(0xFFEC4899),
+                                            isActive = hasCrop,
+                                            onClick = { showVideoCropDialog = true },
+                                            onReset = if (hasCrop) ({ onUpdateVideoCropSpec(VideoCropSpec()) }) else null,
+                                            enabled = !isRunning,
+                                            modifier = Modifier.weight(1f)
+                                        )
+                                    }
                                 }
+                            }
+
+                            if (hasArchivesInQueue) {
+                                val selCount = state.options.selectedArchiveEntries.size
+                                ContextualStudioBannerCard(
+                                    title = if (selCount > 0) {
+                                        "✓ Explorador ($selCount archivo(s) seleccionados)"
+                                    } else {
+                                        "Explorar Comprimido y Re-empaquetar en 1 Paso"
+                                    },
+                                    subtitle = "Inspeccionar árbol interno .rar/.rar5/.zip/.7z, contraseñas y extracción selectiva",
+                                    icon = Icons.Default.FolderZip,
+                                    accentColor = CategoryArchiveColor,
+                                    isActive = selCount > 0,
+                                    onClick = { showArchivePreview = true },
+                                    onReset = if (selCount > 0) ({ onUpdateSelectedArchiveEntries(emptySet()) }) else null,
+                                    enabled = !isRunning
+                                )
                             }
                         }
                     }
                 }
 
-                // Selector inteligente de Formato Destino + Estimador de Tamaño de Salida
+                // ==================== PASO 2: FORMATO DESTINO Y CONTROL ESENCIAL ====================
                 item {
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(20.dp),
-                        colors = CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
-                        )
+                    StepHeaderRow(
+                        stepNumber = "2",
+                        title = "Formato Destino",
+                        trailingContent = {
+                            val estimate = state.outputSizeEstimate
+                            if (estimate != null) {
+                                Surface(
+                                    color = MaterialTheme.colorScheme.primaryContainer,
+                                    shape = RoundedCornerShape(10.dp)
+                                ) {
+                                    Text(
+                                        text = "${estimate.formattedRange} (${estimate.formattedSavingsBadge})",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.ExtraBold,
+                                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                                    )
+                                }
+                            }
+                        }
+                    )
+                }
+
+
+
+                // Tarjeta limpia de Selección de Formato + Control Primario Esencial
+                item {
+                    Surface(
+                        shape = RoundedCornerShape(22.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.40f),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.38f)),
+                        modifier = Modifier.fillMaxWidth()
                     ) {
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(16.dp),
-                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                            verticalArrangement = Arrangement.spacedBy(14.dp)
                         ) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(
-                                    text = "Formato Destino",
-                                    style = MaterialTheme.typography.titleMedium,
-                                    fontWeight = FontWeight.Bold
-                                )
-                                val estimate = state.outputSizeEstimate
-                                if (estimate != null) {
-                                    Surface(
-                                        color = MaterialTheme.colorScheme.primaryContainer,
-                                        shape = RoundedCornerShape(10.dp)
-                                    ) {
-                                        Text(
-                                            text = "Salida est.: ${estimate.formattedRange} (${estimate.formattedSavingsBadge})",
-                                            style = MaterialTheme.typography.labelSmall,
-                                            fontWeight = FontWeight.Bold,
-                                            color = MaterialTheme.colorScheme.onPrimaryContainer,
-                                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
-                                        )
-                                    }
-                                }
-                            }
-
                             FormatChipSelector(
                                 availableFormats = state.availableTargetFormats,
                                 selectedFormat = state.selectedTargetFormat,
@@ -1153,252 +980,23 @@ fun ConfigureScreen(
                                 onSelectFormat = onSelectTargetFormat,
                                 enabled = !isRunning
                             )
-                        }
-                    }
-                }
 
-                // Panel dinámico de parámetros (v0.2 + v0.3)
-                item {
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(20.dp),
-                        colors = CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
-                        )
-                    ) {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(16.dp),
-                            verticalArrangement = Arrangement.spacedBy(16.dp)
-                        ) {
-                            Text(
-                                text = "Parámetros de Conversión",
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.Bold
-                            )
-
-                            if (state.showPdfActionModeSelector && !state.options.hasVisualPdfEdits) {
-                                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    Text(
-                                        text = "Modo de operación PDF",
-                                        style = MaterialTheme.typography.labelLarge,
-                                        color = MaterialTheme.colorScheme.primary
-                                    )
-                                    FlowRow(
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                                    ) {
-                                        PdfActionMode.entries.forEach { mode ->
-                                            val selected = state.options.pdfActionMode == mode
-                                            FilterChip(
-                                                selected = selected,
-                                                onClick = { onUpdatePdfActionMode(mode) },
-                                                enabled = !isRunning,
-                                                label = { Text(mode.labelEs) }
-                                            )
-                                        }
-                                    }
-                                    Text(
-                                        text = state.options.pdfActionMode.descriptionEs,
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-
-                                    if (state.options.pdfActionMode == PdfActionMode.SPLIT_BY_CHUNK) {
-                                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                            listOf(2, 3, 5, 10).forEach { chunk ->
-                                                FilterChip(
-                                                    selected = state.options.pdfSplitChunkPages == chunk,
-                                                    onClick = { onUpdatePdfSplitChunkPages(chunk) },
-                                                    enabled = !isRunning,
-                                                    label = { Text("Cada $chunk págs.") }
-                                                )
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-
-                            if (state.showMergePdfToggle) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        Text(
-                                            text = "Unir en un solo archivo PDF",
-                                            style = MaterialTheme.typography.bodyLarge,
-                                            fontWeight = FontWeight.SemiBold
-                                        )
-                                        Text(
-                                            text = "Combina los ${state.inputFiles.size} archivos en el orden actual (#1 → #${state.inputFiles.size})",
-                                            style = MaterialTheme.typography.bodyMedium,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                    }
-                                    Spacer(modifier = Modifier.width(12.dp))
-                                    Switch(
-                                        checked = state.options.mergeIntoSinglePdf,
-                                        onCheckedChange = onUpdateMergeSinglePdf,
-                                        enabled = !isRunning
-                                    )
-                                }
-                            }
-
-                            if (state.showPdfPageSetupSelector) {
-                                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    Text(
-                                        text = "Tamaño y orientación de página PDF",
-                                        style = MaterialTheme.typography.bodyLarge,
-                                        fontWeight = FontWeight.SemiBold
-                                    )
-                                    FlowRow(
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                                    ) {
-                                        PdfPageSize.entries.forEach { size ->
-                                            FilterChip(
-                                                selected = state.options.pdfPageSize == size,
-                                                onClick = { onUpdatePdfPageSize(size) },
-                                                enabled = !isRunning,
-                                                label = { Text(size.labelEs) }
-                                            )
-                                        }
-                                        PdfPageOrientation.entries.forEach { orientation ->
-                                            FilterChip(
-                                                selected = state.options.pdfPageOrientation == orientation,
-                                                onClick = { onUpdatePdfPageOrientation(orientation) },
-                                                enabled = !isRunning,
-                                                label = { Text(orientation.labelEs) }
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-
-                            if (state.showPageRangeField) {
-                                OutlinedTextField(
-                                    value = state.options.pageRangeSpec,
-                                    onValueChange = onUpdatePageRangeSpec,
-                                    enabled = !isRunning,
-                                    modifier = Modifier.fillMaxWidth(),
-                                    singleLine = true,
-                                    label = { Text("Rango de páginas (opcional)") },
-                                    placeholder = { Text("Ej: 1-3, 5, 8-10 (vacío = todas)") }
-                                )
-                            }
-
-                            if (state.showPdfPasswordField) {
-                                val passLabel = when (state.options.pdfActionMode) {
-                                    PdfActionMode.PROTECT_PASSWORD -> "Contraseña para cifrar el PDF (obligatoria)"
-                                    PdfActionMode.UNLOCK_PASSWORD -> "Contraseña actual del PDF a desbloquear"
-                                    else -> "Contraseña para proteger el PDF generado (opcional)"
-                                }
-                                OutlinedTextField(
-                                    value = state.options.pdfPassword,
-                                    onValueChange = onUpdatePdfPassword,
-                                    enabled = !isRunning,
-                                    modifier = Modifier.fillMaxWidth(),
-                                    singleLine = true,
-                                    visualTransformation = PasswordVisualTransformation(),
-                                    leadingIcon = {
-                                        Icon(imageVector = Icons.Default.Lock, contentDescription = null)
-                                    },
-                                    label = { Text(passLabel) },
-                                    placeholder = { Text("Cifrado local estándar PDFBox") },
-                                    trailingIcon = {
-                                        if (state.options.pdfPassword.isNotEmpty()) {
-                                            TextButton(onClick = { onUpdatePdfPassword("") }) {
-                                                Text("Limpiar")
-                                            }
-                                        }
-                                    }
-                                )
-                            }
-
-                            // Decoraciones PDF v0.3: Marca de agua, Numeración, Firma Manuscrita y Sello QR
-                            if (state.showPdfDecorationsSection) {
-                                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                                    Text(
-                                        text = "Marca de Agua, Numeración, Firma y Sello QR en PDF",
-                                        style = MaterialTheme.typography.bodyLarge,
-                                        fontWeight = FontWeight.SemiBold
-                                    )
-                                    OutlinedTextField(
-                                        value = state.options.pdfWatermarkText,
-                                        onValueChange = onUpdatePdfWatermarkText,
-                                        enabled = !isRunning,
-                                        modifier = Modifier.fillMaxWidth(),
-                                        singleLine = true,
-                                        label = { Text("Marca de agua diagonal en PDF (opcional)") },
-                                        placeholder = { Text("Ej: CONFIDENCIAL • BORRADOR") }
-                                    )
-
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Text(
-                                            text = "Numerar páginas automáticamente (Página X de Y)",
-                                            style = MaterialTheme.typography.bodyMedium,
-                                            modifier = Modifier.weight(1f)
-                                        )
-                                        Switch(
-                                            checked = state.options.addPdfPageNumbers,
-                                            onCheckedChange = onUpdateAddPdfPageNumbers,
-                                            enabled = !isRunning
-                                        )
-                                    }
-
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        OutlinedButton(
-                                            onClick = { showSignaturePad = true },
-                                            enabled = !isRunning,
-                                            modifier = Modifier.weight(1f)
-                                        ) {
-                                            Icon(Icons.Default.Draw, contentDescription = null, modifier = Modifier.size(16.dp))
-                                            Spacer(modifier = Modifier.width(6.dp))
-                                            Text(
-                                                if (state.options.pdfSignaturePngPath.isNotBlank()) "✓ Firma Manuscrita Lista"
-                                                else "Dibujar Firma Manuscrita"
-                                            )
-                                        }
-                                    }
-
-                                    OutlinedTextField(
-                                        value = state.options.pdfStampQrContent,
-                                        onValueChange = onUpdatePdfStampQrContent,
-                                        enabled = !isRunning,
-                                        modifier = Modifier.fillMaxWidth(),
-                                        singleLine = true,
-                                        label = { Text("Estampar código QR en pág. 1 del PDF (opcional)") },
-                                        placeholder = { Text("Texto o URL para el sello QR") }
-                                    )
-                                }
-                            }
-
-                            if (state.showQualitySlider) {
+                            // Control Primario Esencial (solo el ajuste más importante del formato seleccionado)
+                            if (state.showImageQualityOptions) {
+                                HorizontalDivider()
                                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                     Row(
                                         modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                        verticalAlignment = Alignment.CenterVertically
+                                        horizontalArrangement = Arrangement.SpaceBetween
                                     ) {
                                         Text(
-                                            text = "Calidad / Nivel de compresión",
-                                            style = MaterialTheme.typography.bodyLarge,
+                                            text = "Calidad de compresión",
+                                            style = MaterialTheme.typography.bodyMedium,
                                             fontWeight = FontWeight.SemiBold
                                         )
                                         Text(
                                             text = "${state.options.clampedQuality}%",
-                                            style = MaterialTheme.typography.titleMedium,
+                                            style = MaterialTheme.typography.bodyMedium,
                                             fontWeight = FontWeight.ExtraBold,
                                             color = MaterialTheme.colorScheme.primary
                                         )
@@ -1407,132 +1005,12 @@ fun ConfigureScreen(
                                         value = state.options.clampedQuality.toFloat(),
                                         onValueChange = { onUpdateQuality(it.roundToInt()) },
                                         valueRange = 10f..100f,
-                                        steps = 17,
                                         enabled = !isRunning
                                     )
                                 }
                             }
 
-                            if (state.showImageResizeOption) {
-                                val dimensionOptions = listOf(
-                                    null to "Original",
-                                    2048 to "2048 px",
-                                    1440 to "1440 px",
-                                    1080 to "1080 px",
-                                    720 to "720 px"
-                                )
-                                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                    Text(
-                                        text = "Escala / Tamaño máximo de imagen",
-                                        style = MaterialTheme.typography.bodyLarge,
-                                        fontWeight = FontWeight.SemiBold
-                                    )
-                                    FlowRow(
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                                    ) {
-                                        dimensionOptions.forEach { (px, label) ->
-                                            FilterChip(
-                                                selected = state.options.maxDimensionPx == px,
-                                                onClick = { onUpdateMaxDimension(px) },
-                                                enabled = !isRunning,
-                                                label = { Text(label) }
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-
-                            if (state.showImageAdvancedV03Options) {
-                                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    if (state.selectedTargetFormat in setOf(SupportedFormat.JPG, SupportedFormat.WEBP)) {
-                                        OutlinedTextField(
-                                            value = state.targetImageMaxKbText,
-                                            onValueChange = onUpdateTargetImageMaxKb,
-                                            enabled = !isRunning,
-                                            modifier = Modifier.fillMaxWidth(),
-                                            singleLine = true,
-                                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                                            label = { Text("Límite de peso máximo por imagen en KB (opcional)") },
-                                            placeholder = { Text("Ej: 400 (comprime hasta quedar < 400 KB)") }
-                                        )
-                                    }
-
-                                    if (state.inputFiles.size >= 2) {
-                                        Text(
-                                            text = "Modo Collage o Tira Continua",
-                                            style = MaterialTheme.typography.bodyLarge,
-                                            fontWeight = FontWeight.SemiBold
-                                        )
-                                        FlowRow(
-                                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                            verticalArrangement = Arrangement.spacedBy(6.dp)
-                                        ) {
-                                            ImageBatchLayoutMode.entries.forEach { layout ->
-                                                FilterChip(
-                                                    selected = state.options.imageBatchLayoutMode == layout,
-                                                    onClick = { onUpdateImageBatchLayoutMode(layout) },
-                                                    enabled = !isRunning,
-                                                    label = { Text(layout.labelEs) }
-                                                )
-                                            }
-                                        }
-                                    }
-
-                                    if (state.selectedTargetFormat == SupportedFormat.GIF) {
-                                        Text(
-                                            text = "Velocidad de GIF animado: ${state.options.animatedGifFps} FPS",
-                                            style = MaterialTheme.typography.bodyMedium,
-                                            fontWeight = FontWeight.SemiBold
-                                        )
-                                        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                            listOf(2, 4, 8, 12).forEach { fps ->
-                                                FilterChip(
-                                                    selected = state.options.animatedGifFps == fps,
-                                                    onClick = { onUpdateAnimatedGifFps(fps) },
-                                                    enabled = !isRunning,
-                                                    label = { Text("$fps FPS") }
-                                                )
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-
-                            if (state.showImageRotationAndExifOptions) {
-                                val rotationOptions = listOf(0, 90, 180, 270)
-                                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.AutoMirrored.Filled.RotateRight,
-                                            contentDescription = null,
-                                            tint = MaterialTheme.colorScheme.primary,
-                                            modifier = Modifier.size(18.dp)
-                                        )
-                                        Text(
-                                            text = "Rotación global de imagen",
-                                            style = MaterialTheme.typography.bodyLarge,
-                                            fontWeight = FontWeight.SemiBold
-                                        )
-                                    }
-                                    FlowRow(
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                                    ) {
-                                        rotationOptions.forEach { deg ->
-                                            FilterChip(
-                                                selected = state.options.normalizedRotationDegrees == deg,
-                                                onClick = { onUpdateImageRotation(deg) },
-                                                enabled = !isRunning,
-                                                label = { Text(if (deg == 0) "0° (Original)" else "$deg°") }
-                                            )
-                                        }
-                                    }
-                                }
-
+                            if (state.showImageTransformOptions) {
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -1540,17 +1018,16 @@ fun ConfigureScreen(
                                 ) {
                                     Column(modifier = Modifier.weight(1f)) {
                                         Text(
-                                            text = "Eliminar metadatos EXIF y ubicación GPS",
-                                            style = MaterialTheme.typography.bodyLarge,
+                                            text = "Limpiar metadatos EXIF y GPS",
+                                            style = MaterialTheme.typography.bodyMedium,
                                             fontWeight = FontWeight.SemiBold
                                         )
                                         Text(
-                                            text = "Limpia etiquetas de cámara, fecha y coordenadas del archivo de salida",
-                                            style = MaterialTheme.typography.bodyMedium,
+                                            text = "Elimina ubicación GPS y datos de cámara",
+                                            style = MaterialTheme.typography.bodySmall,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
                                     }
-                                    Spacer(modifier = Modifier.width(12.dp))
                                     Switch(
                                         checked = state.options.stripExifMetadata,
                                         onCheckedChange = onUpdateStripExif,
@@ -1559,115 +1036,8 @@ fun ConfigureScreen(
                                 }
                             }
 
-                            if (state.showVideoResolutionSelector) {
-                                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    Text(
-                                        text = "Resolución y Encuadre de Video (Media3 Transformer)",
-                                        style = MaterialTheme.typography.bodyLarge,
-                                        fontWeight = FontWeight.SemiBold
-                                    )
-                                    FlowRow(
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                                    ) {
-                                        VideoResolution.entries.forEach { resolution ->
-                                            val isSelected = state.options.videoResolution == resolution
-                                            FilterChip(
-                                                selected = isSelected,
-                                                onClick = { onUpdateVideoResolution(resolution) },
-                                                enabled = !isRunning,
-                                                label = {
-                                                    Text(
-                                                        text = resolution.labelEs,
-                                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
-                                                    )
-                                                }
-                                            )
-                                        }
-                                    }
-
-                                    // Botón para abrir VideoCropDialog (androidx.media3.effect.Crop)
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        FilledTonalButton(
-                                            onClick = { showVideoCropDialog = true },
-                                            enabled = !isRunning,
-                                            modifier = Modifier.weight(1f)
-                                        ) {
-                                            Icon(Icons.Default.Crop, contentDescription = null, modifier = Modifier.size(18.dp))
-                                            Spacer(modifier = Modifier.width(8.dp))
-                                            Text(
-                                                text = if (state.options.videoCropSpec.hasCrop) {
-                                                    "✓ Encuadre de Video Recortado (${state.options.videoCropSpec.aspectPreset.labelEs})"
-                                                } else {
-                                                    "Recorte Táctil de Encuadre de Video"
-                                                },
-                                                fontWeight = FontWeight.Bold
-                                            )
-                                        }
-                                        if (state.options.videoCropSpec.hasCrop) {
-                                            OutlinedButton(
-                                                onClick = { onUpdateVideoCropSpec(VideoCropSpec()) },
-                                                enabled = !isRunning
-                                            ) {
-                                                Text("Original")
-                                            }
-                                        }
-                                    }
-
-                                    Text(
-                                        text = "Velocidad, Rotación y Volteo de Video",
-                                        style = MaterialTheme.typography.bodyLarge,
-                                        fontWeight = FontWeight.SemiBold
-                                    )
-                                    FlowRow(
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                        verticalArrangement = Arrangement.spacedBy(6.dp)
-                                    ) {
-                                        VideoPlaybackSpeed.entries.forEach { spd ->
-                                            FilterChip(
-                                                selected = abs(state.options.videoPlaybackSpeedFactor - spd.factor) < 0.03f,
-                                                onClick = { onUpdateVideoPlaybackSpeed(spd.factor) },
-                                                enabled = !isRunning,
-                                                label = { Text(spd.label) }
-                                            )
-                                        }
-                                    }
-                                    FlowRow(
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                        verticalArrangement = Arrangement.spacedBy(6.dp)
-                                    ) {
-                                        listOf(0, 90, 180, 270).forEach { deg ->
-                                            FilterChip(
-                                                selected = state.options.normalizedVideoRotationDegrees == deg,
-                                                onClick = { onUpdateVideoRotation(deg) },
-                                                enabled = !isRunning,
-                                                label = { Text("Rotar $deg°") }
-                                            )
-                                        }
-                                        FilterChip(
-                                            selected = state.options.videoFlipHorizontal,
-                                            onClick = { onUpdateVideoFlipHorizontal(!state.options.videoFlipHorizontal) },
-                                            enabled = !isRunning,
-                                            label = { Text("Espejo Horizontal") }
-                                        )
-                                    }
-
-                                    OutlinedTextField(
-                                        value = state.targetVideoMaxMbText,
-                                        onValueChange = onUpdateTargetVideoMaxMb,
-                                        enabled = !isRunning,
-                                        modifier = Modifier.fillMaxWidth(),
-                                        singleLine = true,
-                                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                                        label = { Text("Peso máximo objetivo del video en MB (opcional)") },
-                                        placeholder = { Text("Ej: 15 (calcula bitrate automático para WhatsApp/Discord)") }
-                                    )
-                                }
-
+                            if (state.showMultiFileMergePdfToggle) {
+                                HorizontalDivider()
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -1675,17 +1045,121 @@ fun ConfigureScreen(
                                 ) {
                                     Column(modifier = Modifier.weight(1f)) {
                                         Text(
-                                            text = "Silenciar video (quitar pista de audio)",
-                                            style = MaterialTheme.typography.bodyLarge,
+                                            text = "Unir todos en un único PDF",
+                                            style = MaterialTheme.typography.bodyMedium,
                                             fontWeight = FontWeight.SemiBold
                                         )
                                         Text(
-                                            text = "Exporta el video sin sonido para reducir el peso final",
-                                            style = MaterialTheme.typography.bodyMedium,
+                                            text = "Combina los ${state.inputFiles.size} archivos siguiendo el orden actual",
+                                            style = MaterialTheme.typography.bodySmall,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
                                     }
-                                    Spacer(modifier = Modifier.width(12.dp))
+                                    Switch(
+                                        checked = state.options.mergeIntoSinglePdf,
+                                        onCheckedChange = onUpdateMergeSinglePdf,
+                                        enabled = !isRunning
+                                    )
+                                }
+                            }
+
+                            if (state.showSinglePdfActionOptions) {
+                                HorizontalDivider()
+                                Text(
+                                    text = "Modo de operación PDF",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                FlowRow(
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    PdfActionMode.entries.forEach { mode ->
+                                        FilterChip(
+                                            selected = state.options.pdfActionMode == mode,
+                                            onClick = { onUpdatePdfActionMode(mode) },
+                                            enabled = !isRunning,
+                                            shape = RoundedCornerShape(10.dp),
+                                            label = { Text(mode.labelEs) }
+                                        )
+                                    }
+                                }
+
+                                if (state.options.pdfActionMode == PdfActionMode.SPLIT_RANGE) {
+                                    OutlinedTextField(
+                                        value = state.options.pageRangeSpec,
+                                        onValueChange = onUpdatePageRangeSpec,
+                                        modifier = Modifier.fillMaxWidth(),
+                                        enabled = !isRunning,
+                                        singleLine = true,
+                                        label = { Text("Rango de páginas (ej. 1-3, 5, 8-10)") }
+                                    )
+                                }
+
+                                if (state.options.pdfActionMode == PdfActionMode.SPLIT_BY_CHUNK) {
+                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        listOf(1, 2, 5, 10).forEach { chunk ->
+                                            FilterChip(
+                                                selected = state.options.pdfSplitChunkPages == chunk,
+                                                onClick = { onUpdatePdfSplitChunkPages(chunk) },
+                                                enabled = !isRunning,
+                                                label = { Text("Cada $chunk pág.") }
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+
+                            if (state.showPdfPasswordInput) {
+                                OutlinedTextField(
+                                    value = state.options.pdfPassword,
+                                    onValueChange = onUpdatePdfPassword,
+                                    modifier = Modifier.fillMaxWidth(),
+                                    enabled = !isRunning,
+                                    singleLine = true,
+                                    visualTransformation = PasswordVisualTransformation(),
+                                    label = {
+                                        Text(
+                                            if (state.options.pdfActionMode == PdfActionMode.UNLOCK_PASSWORD) {
+                                                "Contraseña actual del PDF"
+                                            } else {
+                                                "Contraseña para cifrar el PDF (opcional)"
+                                            }
+                                        )
+                                    }
+                                )
+                            }
+
+                            if (state.showVideoOptions) {
+                                HorizontalDivider()
+                                Text(
+                                    text = "Resolución de Video",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                FlowRow(
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    VideoResolution.entries.forEach { res ->
+                                        FilterChip(
+                                            selected = state.options.videoResolution == res,
+                                            onClick = { onUpdateVideoResolution(res) },
+                                            enabled = !isRunning,
+                                            label = { Text(res.labelEs) }
+                                        )
+                                    }
+                                }
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = "Silenciar pista de audio",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
                                     Switch(
                                         checked = state.options.muteVideoAudio,
                                         onCheckedChange = onUpdateMuteVideoAudio,
@@ -1694,124 +1168,466 @@ fun ConfigureScreen(
                                 }
                             }
 
-                            if (state.showAudioV03Options) {
-                                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            if (state.showAudioAdvancedOptions) {
+                                HorizontalDivider()
+                                Text(
+                                    text = "Calidad / Bitrate de Audio",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    AudioBitrateKbps.entries.forEach { br ->
+                                        FilterChip(
+                                            selected = state.options.audioBitrateKbps == br.kbps,
+                                            onClick = { onUpdateAudioBitrateKbps(br.kbps) },
+                                            enabled = !isRunning,
+                                            label = { Text(br.label) }
+                                        )
+                                    }
+                                }
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = "Normalizar volumen (Auto-Gain -1.0 dBFS)",
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            fontWeight = FontWeight.SemiBold
+                                        )
+                                        Text(
+                                            text = "Nivela el volumen máximo sin saturación",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                    Switch(
+                                        checked = state.options.audioNormalizeAutoGain,
+                                        onCheckedChange = onUpdateAudioNormalizeAutoGain,
+                                        enabled = !isRunning
+                                    )
+                                }
+                            }
+
+                            if (state.showArchiveLevelOptions) {
+                                HorizontalDivider()
+                                Text(
+                                    text = "Nivel de compresión",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                FlowRow(
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    ArchiveCompressionLevel.entries.forEach { lvl ->
+                                        FilterChip(
+                                            selected = state.options.archiveCompressionLevel == lvl,
+                                            onClick = { onUpdateArchiveCompressionLevel(lvl) },
+                                            enabled = !isRunning,
+                                            label = { Text(lvl.labelEs) }
+                                        )
+                                    }
+                                }
+                            }
+
+                            if (state.inputFiles.any { it.format == SupportedFormat.RAR || it.format == SupportedFormat.CBR }) {
+                                OutlinedTextField(
+                                    value = state.options.archivePassword,
+                                    onValueChange = onUpdateArchivePassword,
+                                    modifier = Modifier.fillMaxWidth(),
+                                    enabled = !isRunning,
+                                    singleLine = true,
+                                    visualTransformation = PasswordVisualTransformation(),
+                                    label = { Text("Contraseña del archivo .RAR / .RAR5 (si está cifrado)") }
+                                )
+                            }
+
+                            if (state.showVaultSecurityOptions) {
+                                HorizontalDivider()
+                                if (allVaultsInQueue) {
                                     Text(
-                                        text = "Bitrate de Audio, Normalización Auto-Gain y Etiquetas ID3v2.3",
-                                        style = MaterialTheme.typography.bodyLarge,
+                                        text = "Modo Desencriptación: se restaurará el archivo original con su nombre y extensión originales en Downloads/AnyWall/",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                }
+                                OutlinedTextField(
+                                    value = state.options.vaultPassword,
+                                    onValueChange = onUpdateVaultPassword,
+                                    modifier = Modifier.fillMaxWidth(),
+                                    enabled = !isRunning,
+                                    singleLine = true,
+                                    visualTransformation = PasswordVisualTransformation(),
+                                    label = {
+                                        Text(
+                                            if (allVaultsInQueue) "Contraseña para desencriptar el archivo .anywall"
+                                            else "Contraseña para cifrar la Bóveda AES-256-GCM (.anywall)"
+                                        )
+                                    }
+                                )
+                            }
+
+                            if (state.showQrGeneratorOptions) {
+                                HorizontalDivider()
+                                OutlinedTextField(
+                                    value = state.options.qrCustomText,
+                                    onValueChange = onUpdateQrCustomText,
+                                    modifier = Modifier.fillMaxWidth(),
+                                    enabled = !isRunning,
+                                    label = { Text("Texto o URL para el código QR (vacío = usar archivo)") }
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // ==================== ACORDEÓN 1: OPCIONES AVANZADAS DEL FORMATO ====================
+                val hasAnyFormatAdvancedSection = state.showImageTransformOptions ||
+                    state.showAnimatedGifOptions ||
+                    state.showDocumentPageLayoutOptions ||
+                    state.showPdfBrandingAndStampOptions ||
+                    state.showVideoOptions ||
+                    state.showAudioAdvancedOptions ||
+                    state.showMediaTrimAndMuteOptions ||
+                    state.showArchiveLevelOptions ||
+                    state.showFileSplitOptions ||
+                    state.showStructuredDataAndTextOptions
+
+                if (hasAnyFormatAdvancedSection) {
+                    item {
+                        CollapsibleSettingsCard(
+                            title = "Opciones Avanzadas del Formato",
+                            subtitle = "Dimensiones, collages, marca de agua PDF, velocidad, etiquetas ID3 y codificación",
+                            icon = Icons.Default.Tune,
+                            expanded = expandFormatAdvanced,
+                            onToggleExpand = { expandFormatAdvanced = !expandFormatAdvanced }
+                        ) {
+                            // A. Opciones avanzadas de Imagen
+                            if (state.showImageTransformOptions) {
+                                Text(
+                                    text = "Redimensionado máximo (px)",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                val dimOptions = listOf(null to "Original", 3840 to "4K", 1920 to "1920px", 1280 to "1280px", 800 to "800px")
+                                FlowRow(
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    dimOptions.forEach { (px, label) ->
+                                        FilterChip(
+                                            selected = state.options.maxDimensionPx == px,
+                                            onClick = { onUpdateMaxDimension(px) },
+                                            enabled = !isRunning,
+                                            label = { Text(label) }
+                                        )
+                                    }
+                                }
+
+                                Text(
+                                    text = "Rotación rápida",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    listOf(0, 90, 180, 270).forEach { deg ->
+                                        FilterChip(
+                                            selected = state.options.normalizedRotationDegrees == deg,
+                                            onClick = { onUpdateImageRotation(deg) },
+                                            enabled = !isRunning,
+                                            label = { Text("${deg}°") }
+                                        )
+                                    }
+                                }
+
+                                OutlinedTextField(
+                                    value = state.targetImageMaxKbText,
+                                    onValueChange = onUpdateTargetImageMaxKb,
+                                    modifier = Modifier.fillMaxWidth(),
+                                    enabled = !isRunning,
+                                    singleLine = true,
+                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                    label = { Text("Peso máximo objetivo en KB (opcional, ej. 200)") }
+                                )
+
+                                if (state.inputFiles.size >= 2) {
+                                    Text(
+                                        text = "Composición por lote (Collage / Tira)",
+                                        style = MaterialTheme.typography.labelLarge,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                    FlowRow(
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        ImageBatchLayoutMode.entries.forEach { mode ->
+                                            FilterChip(
+                                                selected = state.options.imageBatchLayoutMode == mode,
+                                                onClick = { onUpdateImageBatchLayoutMode(mode) },
+                                                enabled = !isRunning,
+                                                label = { Text(mode.labelEs) }
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+
+                            if (state.showAnimatedGifOptions) {
+                                Text(
+                                    text = "Fotogramas por segundo (GIF Animado): ${state.options.animatedGifFps} FPS",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                Slider(
+                                    value = state.options.animatedGifFps.toFloat(),
+                                    onValueChange = { onUpdateAnimatedGifFps(it.roundToInt()) },
+                                    valueRange = 1f..15f,
+                                    steps = 13,
+                                    enabled = !isRunning
+                                )
+                            }
+
+                            // B. Opciones avanzadas de PDF y Documentos
+                            if (state.showDocumentPageLayoutOptions) {
+                                Text(
+                                    text = "Tamaño y orientación de hoja PDF",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    PdfPageSize.entries.forEach { size ->
+                                        FilterChip(
+                                            selected = state.options.pdfPageSize == size,
+                                            onClick = { onUpdatePdfPageSize(size) },
+                                            enabled = !isRunning,
+                                            label = { Text(size.labelEs) }
+                                        )
+                                    }
+                                    PdfPageOrientation.entries.forEach { orient ->
+                                        FilterChip(
+                                            selected = state.options.pdfPageOrientation == orient,
+                                            onClick = { onUpdatePdfPageOrientation(orient) },
+                                            enabled = !isRunning,
+                                            label = { Text(orient.labelEs) }
+                                        )
+                                    }
+                                }
+                            }
+
+                            if (state.showPdfBrandingAndStampOptions) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = "Numerar páginas automáticamente (\"Página X de Y\")",
+                                        style = MaterialTheme.typography.bodyMedium,
                                         fontWeight = FontWeight.SemiBold
                                     )
-                                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                        AudioBitrateKbps.entries.forEach { br ->
-                                            FilterChip(
-                                                selected = state.options.audioBitrateKbps == br.kbps,
-                                                onClick = { onUpdateAudioBitrateKbps(br.kbps) },
-                                                enabled = !isRunning,
-                                                label = { Text(br.label) }
-                                            )
-                                        }
-                                    }
-                                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                        listOf(0 to "Sin Fade", 2 to "Fade In/Out 2s", 4 to "Fade In/Out 4s").forEach { (sec, label) ->
-                                            FilterChip(
-                                                selected = state.options.audioFadeInSeconds == sec,
-                                                onClick = { onUpdateAudioFadeSeconds(sec, sec) },
-                                                enabled = !isRunning,
-                                                label = { Text(label) }
-                                            )
-                                        }
+                                    Switch(
+                                        checked = state.options.addPdfPageNumbers,
+                                        onCheckedChange = onUpdateAddPdfPageNumbers,
+                                        enabled = !isRunning
+                                    )
+                                }
+
+                                OutlinedTextField(
+                                    value = state.options.pdfWatermarkText,
+                                    onValueChange = onUpdatePdfWatermarkText,
+                                    modifier = Modifier.fillMaxWidth(),
+                                    enabled = !isRunning,
+                                    singleLine = true,
+                                    label = { Text("Marca de agua diagonal en PDF (opcional)") }
+                                )
+
+                                OutlinedTextField(
+                                    value = state.options.pdfStampQrContent,
+                                    onValueChange = onUpdatePdfStampQrContent,
+                                    modifier = Modifier.fillMaxWidth(),
+                                    enabled = !isRunning,
+                                    singleLine = true,
+                                    label = { Text("Estampar sello QR en PDF (texto o URL opcional)") }
+                                )
+
+                                OutlinedButton(
+                                    onClick = { showSignaturePad = true },
+                                    enabled = !isRunning,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Icon(Icons.Default.Draw, contentDescription = null, modifier = Modifier.size(18.dp))
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        if (state.options.pdfSignaturePngPath.isNotBlank()) "✓ Firma Manuscrita Lista (Editar)"
+                                        else "Dibujar Firma Manuscrita"
+                                    )
+                                }
+                            }
+
+                            // C. Opciones avanzadas de Video y Audio
+                            if (state.showVideoOptions) {
+                                Text(
+                                    text = "Velocidad de reproducción",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                FlowRow(
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    VideoPlaybackSpeed.entries.forEach { spd ->
+                                        val isSel = abs(state.options.videoPlaybackSpeedFactor - spd.factor) < 0.05f
                                         FilterChip(
-                                            selected = state.options.exportAsRingtone,
-                                            onClick = { onUpdateExportAsRingtone(!state.options.exportAsRingtone) },
+                                            selected = isSel,
+                                            onClick = { onUpdateVideoPlaybackSpeed(spd.factor) },
                                             enabled = !isRunning,
-                                            label = { Text("Guardar en Ringtones") }
+                                            label = { Text(spd.label) }
                                         )
                                     }
+                                }
 
-                                    // Switch de Normalización Automática de Volumen (Auto-Gain a -1.0 dBFS)
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                        verticalAlignment = Alignment.CenterVertically
+                                Text(
+                                    text = "Rotación y Espejo de Video",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                FlowRow(
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    listOf(0, 90, 180, 270).forEach { deg ->
+                                        FilterChip(
+                                            selected = state.options.normalizedVideoRotationDegrees == deg,
+                                            onClick = { onUpdateVideoRotation(deg) },
+                                            enabled = !isRunning,
+                                            label = { Text("${deg}°") }
+                                        )
+                                    }
+                                    FilterChip(
+                                        selected = state.options.videoFlipHorizontal,
+                                        onClick = { onUpdateVideoFlipHorizontal(!state.options.videoFlipHorizontal) },
+                                        enabled = !isRunning,
+                                        label = { Text("Espejo H") }
+                                    )
+                                }
+
+                                OutlinedTextField(
+                                    value = state.targetVideoMaxMbText,
+                                    onValueChange = onUpdateTargetVideoMaxMb,
+                                    modifier = Modifier.fillMaxWidth(),
+                                    enabled = !isRunning,
+                                    singleLine = true,
+                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                    label = { Text("Tamaño máximo objetivo de video en MB (ej. 15)") }
+                                )
+                            }
+
+                            if (state.showAudioAdvancedOptions) {
+                                Text(
+                                    text = "Fundido de entrada / salida (Fade In / Out)",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                FlowRow(
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    listOf(0 to "Sin Fade", 2 to "2 seg", 4 to "4 seg", 6 to "6 seg").forEach { (sec, label) ->
+                                        val isSel = state.options.audioFadeInSeconds == sec && state.options.audioFadeOutSeconds == sec
+                                        FilterChip(
+                                            selected = isSel,
+                                            onClick = { onUpdateAudioFadeSeconds(sec, sec) },
+                                            enabled = !isRunning,
+                                            label = { Text(label) }
+                                        )
+                                    }
+                                }
+
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = "Modo Tono de Llamada (Ringtone máx. 30 s)",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                    Switch(
+                                        checked = state.options.exportAsRingtone,
+                                        onCheckedChange = onUpdateExportAsRingtone,
+                                        enabled = !isRunning
+                                    )
+                                }
+
+                                // Sub-sección colapsable para Etiquetas ID3v2.3 + Carátula
+                                val audioMeta = state.options.audioMetadataSpec
+                                OutlinedButton(
+                                    onClick = { expandAudioId3Tags = !expandAudioId3Tags },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    shape = RoundedCornerShape(12.dp)
+                                ) {
+                                    Icon(Icons.Default.GraphicEq, contentDescription = null, modifier = Modifier.size(18.dp))
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        if (!audioMeta.isEmpty) "✓ Etiquetas ID3v2.3 y Carátula Configuradas"
+                                        else "Editar Etiquetas ID3v2.3 y Carátula (MP3 / M4A)"
+                                    )
+                                }
+
+                                AnimatedVisibility(visible = expandAudioId3Tags) {
+                                    Column(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(top = 8.dp),
+                                        verticalArrangement = Arrangement.spacedBy(8.dp)
                                     ) {
-                                        Column(modifier = Modifier.weight(1f)) {
-                                            Text(
-                                                text = "Normalización automática de volumen (Auto-Gain -1.0 dBFS)",
-                                                style = MaterialTheme.typography.bodyMedium,
-                                                fontWeight = FontWeight.SemiBold
-                                            )
-                                            Text(
-                                                text = "Analiza el pico PCM real y equilibra la ganancia a -1.0 dBFS con limitador suave anti-clipping",
-                                                style = MaterialTheme.typography.bodySmall,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                                            )
-                                        }
-                                        Spacer(modifier = Modifier.width(12.dp))
-                                        Switch(
-                                            checked = state.options.audioNormalizeAutoGain,
-                                            onCheckedChange = onUpdateAudioNormalizeAutoGain,
-                                            enabled = !isRunning
-                                        )
-                                    }
-
-                                    // Editor de Etiquetas ID3v2.3 + Carátula (APIC) para MP3 / M4A
-                                    if (state.selectedTargetFormat in setOf(SupportedFormat.MP3, SupportedFormat.M4A)) {
-                                        val audioMeta = state.options.audioMetadataSpec
-                                        Text(
-                                            text = "Etiquetas de Audio ID3v2.3 y Carátula (MP3 / M4A)",
-                                            style = MaterialTheme.typography.labelLarge,
-                                            color = MaterialTheme.colorScheme.primary,
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                        Row(
-                                            modifier = Modifier.fillMaxWidth(),
-                                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                        ) {
+                                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                             OutlinedTextField(
                                                 value = audioMeta.title,
                                                 onValueChange = { onUpdateAudioMetadataSpec(audioMeta.copy(title = it)) },
+                                                modifier = Modifier.weight(1f),
                                                 enabled = !isRunning,
                                                 singleLine = true,
-                                                label = { Text("Título") },
-                                                modifier = Modifier.weight(1f)
+                                                label = { Text("Título") }
                                             )
                                             OutlinedTextField(
                                                 value = audioMeta.artist,
                                                 onValueChange = { onUpdateAudioMetadataSpec(audioMeta.copy(artist = it)) },
+                                                modifier = Modifier.weight(1f),
                                                 enabled = !isRunning,
                                                 singleLine = true,
-                                                label = { Text("Artista") },
-                                                modifier = Modifier.weight(1f)
+                                                label = { Text("Artista") }
                                             )
                                         }
-                                        Row(
-                                            modifier = Modifier.fillMaxWidth(),
-                                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                        ) {
+                                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                             OutlinedTextField(
                                                 value = audioMeta.album,
                                                 onValueChange = { onUpdateAudioMetadataSpec(audioMeta.copy(album = it)) },
+                                                modifier = Modifier.weight(1f),
                                                 enabled = !isRunning,
                                                 singleLine = true,
-                                                label = { Text("Álbum") },
-                                                modifier = Modifier.weight(1.2f)
+                                                label = { Text("Álbum") }
                                             )
                                             OutlinedTextField(
                                                 value = audioMeta.year,
-                                                onValueChange = { onUpdateAudioMetadataSpec(audioMeta.copy(year = it.take(4))) },
+                                                onValueChange = { onUpdateAudioMetadataSpec(audioMeta.copy(year = it.take(8))) },
+                                                modifier = Modifier.weight(0.55f),
                                                 enabled = !isRunning,
                                                 singleLine = true,
                                                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                                                label = { Text("Año") },
-                                                modifier = Modifier.weight(0.6f)
+                                                label = { Text("Año") }
                                             )
                                             OutlinedTextField(
                                                 value = audioMeta.genre,
                                                 onValueChange = { onUpdateAudioMetadataSpec(audioMeta.copy(genre = it)) },
+                                                modifier = Modifier.weight(0.85f),
                                                 enabled = !isRunning,
                                                 singleLine = true,
-                                                label = { Text("Género") },
-                                                modifier = Modifier.weight(0.9f)
+                                                label = { Text("Género") }
                                             )
                                         }
                                         Row(
@@ -1819,15 +1635,15 @@ fun ConfigureScreen(
                                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                                             verticalAlignment = Alignment.CenterVertically
                                         ) {
-                                            OutlinedButton(
+                                            FilledTonalButton(
                                                 onClick = { coverArtPickerLauncher.launch(arrayOf("image/*")) },
                                                 enabled = !isRunning
                                             ) {
                                                 Icon(Icons.Default.Image, contentDescription = null, modifier = Modifier.size(16.dp))
                                                 Spacer(modifier = Modifier.width(6.dp))
                                                 Text(
-                                                    if (audioMeta.coverArtUriString.isNotBlank()) "✓ Carátula Seleccionada (APIC)"
-                                                    else "Elegir Carátula de Álbum"
+                                                    if (audioMeta.coverArtUriString.isNotBlank()) "✓ Carátula APIC Lista"
+                                                    else "Elegir Carátula"
                                                 )
                                             }
                                             if (!audioMeta.isEmpty) {
@@ -1835,7 +1651,7 @@ fun ConfigureScreen(
                                                     onClick = { onUpdateAudioMetadataSpec(AudioMetadataSpec()) },
                                                     enabled = !isRunning
                                                 ) {
-                                                    Text("Limpiar etiquetas")
+                                                    Text("Limpiar")
                                                 }
                                             }
                                         }
@@ -1853,11 +1669,11 @@ fun ConfigureScreen(
                                         Column(modifier = Modifier.weight(1f)) {
                                             Text(
                                                 text = "Unir (Concatenar) clips en un solo archivo",
-                                                style = MaterialTheme.typography.bodyLarge,
+                                                style = MaterialTheme.typography.bodyMedium,
                                                 fontWeight = FontWeight.SemiBold
                                             )
                                             Text(
-                                                text = "Une los ${state.inputFiles.size} archivos multimedia continuamente en el orden actual",
+                                                text = "Une los ${state.inputFiles.size} archivos continuamente",
                                                 style = MaterialTheme.typography.bodySmall,
                                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                                             )
@@ -1869,260 +1685,468 @@ fun ConfigureScreen(
                                         )
                                     }
                                 }
-
-                                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Text(
-                                            text = "Recorte de Línea de Tiempo (Video / Audio)",
-                                            style = MaterialTheme.typography.bodyLarge,
-                                            fontWeight = FontWeight.SemiBold
-                                        )
-                                        if (state.options.trimStartMillis > 0L || state.options.trimEndMillis > 0L) {
-                                            Text(
-                                                text = "${state.options.trimStartMillis} ms – ${if (state.options.trimEndMillis > 0L) "${state.options.trimEndMillis} ms" else "Fin"}",
-                                                style = MaterialTheme.typography.labelSmall,
-                                                color = MaterialTheme.colorScheme.primary,
-                                                fontWeight = FontWeight.Bold
-                                            )
-                                        }
-                                    }
-
-                                    FilledTonalButton(
-                                        onClick = { showMediaTimelineTrimmer = true },
-                                        enabled = !isRunning && firstMediaFile != null,
-                                        modifier = Modifier.fillMaxWidth()
-                                    ) {
-                                        Icon(
-                                            imageVector = if (firstMediaFile?.format?.isVideo == true) Icons.Default.ContentCut else Icons.Default.GraphicEq,
-                                            contentDescription = null,
-                                            modifier = Modifier.size(18.dp)
-                                        )
-                                        Spacer(modifier = Modifier.width(8.dp))
-                                        Text(
-                                            text = if (firstMediaFile?.format?.isVideo == true) {
-                                                "Abrir Línea de Tiempo Táctil (Tira de Fotogramas + Capturar Frame)"
-                                            } else {
-                                                "Abrir Línea de Tiempo Táctil (Forma de Onda de Audio)"
-                                            },
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                    }
-
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                                    ) {
-                                        OutlinedTextField(
-                                            value = state.trimStartText,
-                                            onValueChange = onUpdateTrimStartText,
-                                            enabled = !isRunning,
-                                            modifier = Modifier.weight(1f),
-                                            singleLine = true,
-                                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                                            label = { Text("Inicio (seg)") },
-                                            placeholder = { Text("0") }
-                                        )
-                                        OutlinedTextField(
-                                            value = state.trimEndText,
-                                            onValueChange = onUpdateTrimEndText,
-                                            enabled = !isRunning,
-                                            modifier = Modifier.weight(1f),
-                                            singleLine = true,
-                                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                                            label = { Text("Fin (seg)") },
-                                            placeholder = { Text("Hasta el final") }
-                                        )
-                                    }
-                                }
                             }
 
-                            if (state.showArchiveV03Options) {
-                                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    if (state.selectedTargetFormat == SupportedFormat.FILE_PARTS) {
-                                        Text(
-                                            text = "Tamaño de cada parte (.part001, .part002…)",
-                                            style = MaterialTheme.typography.bodyLarge,
-                                            fontWeight = FontWeight.SemiBold
-                                        )
-                                        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                            listOf(5, 10, 25, 50, 100).forEach { mb ->
-                                                FilterChip(
-                                                    selected = state.options.fileSplitPartSizeMb == mb,
-                                                    onClick = { onUpdateFileSplitPartSizeMb(mb) },
-                                                    enabled = !isRunning,
-                                                    label = { Text("$mb MB") }
-                                                )
-                                            }
-                                        }
-                                    } else {
-                                        Text(
-                                            text = "Nivel de compresión de archivo",
-                                            style = MaterialTheme.typography.bodyLarge,
-                                            fontWeight = FontWeight.SemiBold
-                                        )
-                                        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                            ArchiveCompressionLevel.entries.forEach { lvl ->
-                                                FilterChip(
-                                                    selected = state.options.archiveCompressionLevel == lvl,
-                                                    onClick = { onUpdateArchiveCompressionLevel(lvl) },
-                                                    enabled = !isRunning,
-                                                    label = { Text(lvl.labelEs) }
-                                                )
-                                            }
-                                        }
-                                        Row(
-                                            modifier = Modifier.fillMaxWidth(),
-                                            horizontalArrangement = Arrangement.SpaceBetween,
-                                            verticalAlignment = Alignment.CenterVertically
-                                        ) {
-                                            Text(
-                                                text = "Conservar jerarquía de subcarpetas de origen",
-                                                style = MaterialTheme.typography.bodyMedium,
-                                                modifier = Modifier.weight(1f)
-                                            )
-                                            Switch(
-                                                checked = state.options.preserveSubfolderStructure,
-                                                onCheckedChange = onUpdatePreserveSubfolderStructure,
-                                                enabled = !isRunning
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-
-                            if (state.showStructuredDataV03Options) {
-                                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Text(
-                                            text = "Formatear con sangría limpia (Pretty Print)",
-                                            style = MaterialTheme.typography.bodyMedium,
-                                            fontWeight = FontWeight.SemiBold
-                                        )
-                                        Switch(
-                                            checked = state.options.prettyPrintStructuredData,
-                                            onCheckedChange = onUpdatePrettyPrintStructuredData,
-                                            enabled = !isRunning
-                                        )
-                                    }
+                            // D. Opciones avanzadas de Comprimidos, Particionado y Datos/Texto
+                            if (state.showArchiveLevelOptions) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
                                     Text(
-                                        text = "Codificación de caracteres y saltos de línea",
-                                        style = MaterialTheme.typography.labelLarge
+                                        text = "Conservar jerarquía de subcarpetas",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = FontWeight.SemiBold
                                     )
-                                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                        TextEncodingOption.entries.forEach { enc ->
-                                            FilterChip(
-                                                selected = state.options.textEncoding == enc,
-                                                onClick = { onUpdateTextEncoding(enc) },
-                                                enabled = !isRunning,
-                                                label = { Text(enc.label) }
-                                            )
-                                        }
-                                    }
-                                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                        LineEndingOption.entries.forEach { eol ->
-                                            FilterChip(
-                                                selected = state.options.lineEndingOption == eol,
-                                                onClick = { onUpdateLineEndingOption(eol) },
-                                                enabled = !isRunning,
-                                                label = { Text(eol.label) }
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-
-                            if (state.showVaultPasswordField) {
-                                OutlinedTextField(
-                                    value = state.options.vaultPassword,
-                                    onValueChange = onUpdateVaultPassword,
-                                    enabled = !isRunning,
-                                    modifier = Modifier.fillMaxWidth(),
-                                    singleLine = true,
-                                    visualTransformation = PasswordVisualTransformation(),
-                                    leadingIcon = { Icon(Icons.Default.Lock, contentDescription = null) },
-                                    label = { Text("Contraseña de Bóveda Universal AES-256-GCM (.anywall)") },
-                                    placeholder = { Text("Derivación PBKDF2-HMAC-SHA256 (120 000 iter.)") }
-                                )
-                            }
-
-                            if (state.showQrCustomTextField) {
-                                OutlinedTextField(
-                                    value = state.options.qrCustomText,
-                                    onValueChange = onUpdateQrCustomText,
-                                    enabled = !isRunning,
-                                    modifier = Modifier.fillMaxWidth(),
-                                    label = { Text("Texto/URL personalizado para el QR (vacío = usar contenido del archivo)") }
-                                )
-                            }
-
-                            HorizontalDivider()
-
-                            // Nombre y Plantillas Dinámicas + Pipeline de 2 pasos (v0.3)
-                            OutlinedTextField(
-                                value = state.options.customOutputBaseName,
-                                onValueChange = onUpdateCustomOutputName,
-                                enabled = !isRunning,
-                                modifier = Modifier.fillMaxWidth(),
-                                singleLine = true,
-                                label = { Text("Nombre o plantilla de salida (opcional)") },
-                                placeholder = { Text("Ej: {nombre}_{indice}_{fecha}") },
-                                trailingIcon = {
-                                    if (state.options.customOutputBaseName.isNotEmpty()) {
-                                        TextButton(onClick = { onUpdateCustomOutputName("") }) {
-                                            Text("Limpiar")
-                                        }
-                                    }
-                                }
-                            )
-
-                            FlowRow(
-                                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                verticalArrangement = Arrangement.spacedBy(4.dp)
-                            ) {
-                                listOf(
-                                    "{nombre}_{indice}",
-                                    "{nombre}_{fecha}",
-                                    "Doc_{indice}_{fecha}",
-                                    "{nombre}_{formato}"
-                                ).forEach { tpl ->
-                                    AssistChip(
-                                        onClick = { onUpdateCustomOutputName(tpl) },
-                                        enabled = !isRunning,
-                                        label = { Text(tpl, style = MaterialTheme.typography.labelSmall) }
+                                    Switch(
+                                        checked = state.options.preserveSubfolderStructure,
+                                        onCheckedChange = onUpdatePreserveSubfolderStructure,
+                                        enabled = !isRunning
                                     )
                                 }
                             }
 
-                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            if (state.showFileSplitOptions) {
                                 Text(
-                                    text = "Encadenar Paso 2 Automático (Pipeline de 2 pasos)",
-                                    style = MaterialTheme.typography.bodyLarge,
-                                    fontWeight = FontWeight.SemiBold
+                                    text = "Tamaño de cada parte (.part001)",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = MaterialTheme.colorScheme.primary
                                 )
                                 FlowRow(
                                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                                     verticalArrangement = Arrangement.spacedBy(6.dp)
                                 ) {
-                                    SecondaryPipelineAction.entries.forEach { action ->
+                                    listOf(5, 10, 25, 50, 100).forEach { mb ->
                                         FilterChip(
-                                            selected = state.options.secondaryPipelineAction == action,
-                                            onClick = { onUpdateSecondaryPipelineAction(action) },
+                                            selected = state.options.fileSplitPartSizeMb == mb,
+                                            onClick = { onUpdateFileSplitPartSizeMb(mb) },
                                             enabled = !isRunning,
-                                            label = { Text(action.labelEs) }
+                                            label = { Text("$mb MB") }
+                                        )
+                                    }
+                                }
+                            }
+
+                            if (state.showStructuredDataAndTextOptions) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = "Formatear y embellecer (Pretty Print)",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                    Switch(
+                                        checked = state.options.prettyPrintStructuredData,
+                                        onCheckedChange = onUpdatePrettyPrintStructuredData,
+                                        enabled = !isRunning
+                                    )
+                                }
+
+                                Text(
+                                    text = "Codificación de caracteres",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                FlowRow(
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    TextEncodingOption.entries.forEach { enc ->
+                                        FilterChip(
+                                            selected = state.options.textEncoding == enc,
+                                            onClick = { onUpdateTextEncoding(enc) },
+                                            enabled = !isRunning,
+                                            label = { Text(enc.label) }
+                                        )
+                                    }
+                                }
+
+                                Text(
+                                    text = "Saltos de línea",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                FlowRow(
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    LineEndingOption.entries.forEach { le ->
+                                        FilterChip(
+                                            selected = state.options.lineEndingOption == le,
+                                            onClick = { onUpdateLineEndingOption(le) },
+                                            enabled = !isRunning,
+                                            label = { Text(le.label) }
                                         )
                                     }
                                 }
                             }
                         }
                     }
+                }
+
+                // ==================== ACORDEÓN 2: NOMBRE DE SALIDA Y PIPELINE DE 2 PASOS ====================
+                item {
+                    val hasOutputCustomization = state.options.customOutputBaseName.isNotBlank() ||
+                        state.options.secondaryPipelineAction != SecondaryPipelineAction.NONE
+                    CollapsibleSettingsCard(
+                        title = if (hasOutputCustomization) "✓ Nombre de Salida y Pipeline (Activo)" else "Nombre de Salida y Pipeline de 2 Pasos",
+                        subtitle = "Plantillas {nombre}_{fecha}_{indice} y empaquetado/cifrado posterior",
+                        icon = Icons.Default.FilterNone,
+                        expanded = expandOutputAndPipeline,
+                        onToggleExpand = { expandOutputAndPipeline = !expandOutputAndPipeline }
+                    ) {
+                        OutlinedTextField(
+                            value = state.options.customOutputBaseName,
+                            onValueChange = onUpdateCustomOutputName,
+                            modifier = Modifier.fillMaxWidth(),
+                            enabled = !isRunning,
+                            singleLine = true,
+                            label = { Text("Nombre o plantilla (ej. {nombre}_{fecha}_{indice})") }
+                        )
+
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            listOf("{nombre}", "{indice}", "{fecha}", "{formato}").forEach { token ->
+                                AssistChip(
+                                    onClick = {
+                                        val cur = state.options.customOutputBaseName
+                                        val next = if (cur.isBlank()) "{nombre}_$token" else "${cur}_$token"
+                                        onUpdateCustomOutputName(next)
+                                    },
+                                    enabled = !isRunning,
+                                    label = { Text("+ $token") }
+                                )
+                            }
+                        }
+
+                        HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+
+                        Text(
+                            text = "Acción secundaria tras convertir (Pipeline de 2 pasos)",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            SecondaryPipelineAction.entries.forEach { action ->
+                                FilterChip(
+                                    selected = state.options.secondaryPipelineAction == action,
+                                    onClick = { onUpdateSecondaryPipelineAction(action) },
+                                    enabled = !isRunning,
+                                    label = { Text(action.labelEs) }
+                                )
+                            }
+                        }
+
+                        if (state.options.secondaryPipelineAction == SecondaryPipelineAction.ENCRYPT_AES256 &&
+                            !state.showVaultSecurityOptions
+                        ) {
+                            OutlinedTextField(
+                                value = state.options.vaultPassword,
+                                onValueChange = onUpdateVaultPassword,
+                                modifier = Modifier.fillMaxWidth(),
+                                enabled = !isRunning,
+                                singleLine = true,
+                                visualTransformation = PasswordVisualTransformation(),
+                                label = { Text("Contraseña para la Bóveda .anywall del Paso 2") }
+                            )
+                        }
+                    }
+                }
+
+                item {
+                    Spacer(modifier = Modifier.height(24.dp))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun StepHeaderRow(
+    stepNumber: String,
+    title: String,
+    trailingContent: @Composable () -> Unit = {}
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(26.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.primary),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = stepNumber,
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = MaterialTheme.colorScheme.onPrimary
+                )
+            }
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.ExtraBold
+            )
+        }
+        trailingContent()
+    }
+}
+
+@Composable
+private fun ContextualStudioBannerCard(
+    title: String,
+    subtitle: String,
+    icon: ImageVector,
+    accentColor: Color,
+    isActive: Boolean,
+    onClick: () -> Unit,
+    onReset: (() -> Unit)? = null,
+    enabled: Boolean = true,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(18.dp),
+        color = if (isActive) {
+            accentColor.copy(alpha = 0.16f)
+        } else {
+            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+        },
+        border = BorderStroke(
+            width = if (isActive) 1.5.dp else 1.dp,
+            color = accentColor.copy(alpha = if (isActive) 0.55f else 0.30f)
+        )
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(
+                    Brush.horizontalGradient(
+                        colors = listOf(
+                            accentColor.copy(alpha = 0.12f),
+                            Color.Transparent
+                        )
+                    )
+                )
+                .padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(accentColor.copy(alpha = 0.18f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = title,
+                    tint = accentColor,
+                    modifier = Modifier.size(22.dp)
+                )
+            }
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(2.dp)
+            ) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = FontWeight.ExtraBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = subtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            if (onReset != null) {
+                TextButton(
+                    onClick = onReset,
+                    enabled = enabled
+                ) {
+                    Text("Quitar", style = MaterialTheme.typography.labelMedium)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CollapsibleSettingsCard(
+    title: String,
+    subtitle: String,
+    icon: ImageVector,
+    expanded: Boolean,
+    onToggleExpand: () -> Unit,
+    content: @Composable () -> Unit
+) {
+    Surface(
+        shape = RoundedCornerShape(20.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(modifier = Modifier.fillMaxWidth()) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onToggleExpand() }
+                    .padding(horizontal = 16.dp, vertical = 14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(36.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = icon,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                ) {
+                    Text(
+                        text = title,
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.ExtraBold
+                    )
+                    Text(
+                        text = subtitle,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                Icon(
+                    imageVector = if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            AnimatedVisibility(visible = expanded) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 16.dp, end = 16.dp, bottom = 16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    HorizontalDivider()
+                    content()
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun StickyConversionBottomBar(
+    inputCount: Int,
+    selectedFormat: SupportedFormat?,
+    isDecryptingVault: Boolean = false,
+    estimateRange: String?,
+    estimateSavingsBadge: String?,
+    onSavePreset: () -> Unit,
+    onStartConversion: () -> Unit
+) {
+    Surface(
+        tonalElevation = 6.dp,
+        shadowElevation = 8.dp,
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            if (estimateRange != null && selectedFormat != null) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "$inputCount archivo(s) → ${selectedFormat.label}",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        text = "Salida est.: $estimateRange (${estimateSavingsBadge.orEmpty()})",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Button(
+                    onClick = onStartConversion,
+                    enabled = selectedFormat != null && inputCount > 0,
+                    shape = RoundedCornerShape(14.dp),
+                    elevation = ButtonDefaults.buttonElevation(defaultElevation = 2.dp),
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(50.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.PlayArrow,
+                        contentDescription = null,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = when {
+                            isDecryptingVault -> "Desencriptar y Restaurar Original"
+                            selectedFormat != null -> "Convertir a ${selectedFormat.label}"
+                            else -> "Elige un formato destino"
+                        },
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.ExtraBold
+                    )
                 }
             }
         }

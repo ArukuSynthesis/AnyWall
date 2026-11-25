@@ -83,6 +83,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -616,6 +617,8 @@ private fun PdfPageEditorGridCard(
             null
         }
     }
+    val currentOnDragReorderDelta by rememberUpdatedState(onDragReorderDelta)
+    val currentOnDragReorderEnd by rememberUpdatedState(onDragReorderEnd)
 
     Card(
         modifier = Modifier
@@ -655,13 +658,13 @@ private fun PdfPageEditorGridCard(
                     } else {
                         MaterialTheme.colorScheme.surface
                     },
-                    modifier = Modifier.pointerInput(index) {
+                    modifier = Modifier.pointerInput(item.id) {
                         detectDragGestures(
-                            onDragEnd = onDragReorderEnd,
-                            onDragCancel = onDragReorderEnd,
+                            onDragEnd = { currentOnDragReorderEnd() },
+                            onDragCancel = { currentOnDragReorderEnd() },
                             onDrag = { change, dragAmount ->
                                 change.consume()
-                                onDragReorderDelta(dragAmount.x, dragAmount.y)
+                                currentOnDragReorderDelta(dragAmount.x, dragAmount.y)
                             }
                         )
                     }
@@ -982,6 +985,10 @@ private fun PdfSinglePageTouchStudioDialog(
     var activeScannerCorner by remember { mutableIntStateOf(-1) }
     var activeLoupeNorm by remember { mutableStateOf<Offset?>(null) }
 
+    val currentItem by rememberUpdatedState(item)
+    val currentOnUpdateItem by rememberUpdatedState(onUpdateItem)
+    val currentAnnotationDraftText by rememberUpdatedState(annotationDraftText)
+
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false)
@@ -1139,8 +1146,8 @@ private fun PdfSinglePageTouchStudioDialog(
                                         }
                                     }
                                 }
-                                // Modo Mover / Redimensionar Firma manuscrita
-                                .pointerInput(toolMode, item, bmp) {
+                                // Modo Mover / Redimensionar Firma manuscrita (fluido a 60 FPS sin reiniciar pointerInput)
+                                .pointerInput(toolMode, bmp) {
                                     if (toolMode != PdfTouchToolMode.SIGNATURE_DRAG) return@pointerInput
                                     detectDragGestures { change, dragAmount ->
                                         change.consume()
@@ -1150,20 +1157,21 @@ private fun PdfSinglePageTouchStudioDialog(
                                             bmp.width.toFloat(),
                                             bmp.height.toFloat()
                                         )
+                                        val cur = currentItem
                                         val dx = dragAmount.x / pageRect.width.coerceAtLeast(1f)
                                         val dy = dragAmount.y / pageRect.height.coerceAtLeast(1f)
-                                        val maxX = (1f - item.signatureWidthNorm).coerceAtLeast(0.05f)
-                                        onUpdateItem(
-                                            item.copy(
+                                        val maxX = (1f - cur.signatureWidthNorm).coerceAtLeast(0.05f)
+                                        currentOnUpdateItem(
+                                            cur.copy(
                                                 hasSignatureStamp = true,
-                                                signatureXNorm = (item.signatureXNorm + dx).coerceIn(0.02f, maxX),
-                                                signatureYNorm = (item.signatureYNorm + dy).coerceIn(0.04f, 0.93f)
+                                                signatureXNorm = (cur.signatureXNorm + dx).coerceIn(0.02f, maxX),
+                                                signatureYNorm = (cur.signatureYNorm + dy).coerceIn(0.04f, 0.93f)
                                             )
                                         )
                                     }
                                 }
                                 // Modo Dibujar Caja de Censura o Resaltador amarillo con el dedo
-                                .pointerInput(toolMode, item, bmp) {
+                                .pointerInput(toolMode, bmp) {
                                     if (toolMode != PdfTouchToolMode.DRAW_REDACTION && toolMode != PdfTouchToolMode.HIGHLIGHTER) {
                                         return@pointerInput
                                     }
@@ -1186,6 +1194,7 @@ private fun PdfSinglePageTouchStudioDialog(
                                             dragStartNorm = null
                                             dragCurrentNorm = null
                                             if (s != null && e != null) {
+                                                val cur = currentItem
                                                 val l = minOf(s.x, e.x).coerceIn(0f, 0.96f)
                                                 val t = minOf(s.y, e.y).coerceIn(0f, 0.96f)
                                                 val r = maxOf(s.x, e.x).coerceIn(l + 0.03f, 1f)
@@ -1199,7 +1208,7 @@ private fun PdfSinglePageTouchStudioDialog(
                                                         isPixelated = false,
                                                         effectMode = CensorEffectMode.SOLID_BLACK
                                                     )
-                                                    onUpdateItem(item.copy(redactionBoxes = item.redactionBoxes + box))
+                                                    currentOnUpdateItem(cur.copy(redactionBoxes = cur.redactionBoxes + box))
                                                 } else {
                                                     val highlight = PdfPageAnnotation(
                                                         type = PdfAnnotationType.HIGHLIGHTER,
@@ -1210,7 +1219,7 @@ private fun PdfSinglePageTouchStudioDialog(
                                                         text = "",
                                                         colorArgb = 0xFFFFEB3B.toInt()
                                                     )
-                                                    onUpdateItem(item.copy(annotations = item.annotations + highlight))
+                                                    currentOnUpdateItem(cur.copy(annotations = cur.annotations + highlight))
                                                 }
                                             }
                                         },
@@ -1233,7 +1242,7 @@ private fun PdfSinglePageTouchStudioDialog(
                                     )
                                 }
                                 // Modo Texto / Sello de Fecha arrastrable
-                                .pointerInput(toolMode, item, annotationDraftText, bmp) {
+                                .pointerInput(toolMode, bmp) {
                                     if (toolMode != PdfTouchToolMode.TEXT_STAMP) return@pointerInput
                                     detectDragGestures(
                                         onDragStart = { touch ->
@@ -1243,9 +1252,10 @@ private fun PdfSinglePageTouchStudioDialog(
                                                 bmp.width.toFloat(),
                                                 bmp.height.toFloat()
                                             )
+                                            val cur = currentItem
                                             val nx = ((touch.x - pageRect.left) / pageRect.width.coerceAtLeast(1f)).coerceIn(0.05f, 0.90f)
                                             val ny = ((touch.y - pageRect.top) / pageRect.height.coerceAtLeast(1f)).coerceIn(0.05f, 0.94f)
-                                            val list = item.annotations.toMutableList()
+                                            val list = cur.annotations.toMutableList()
                                             val textIdx = list.indexOfLast { it.type != PdfAnnotationType.HIGHLIGHTER }
                                             if (textIdx >= 0) {
                                                 list[textIdx] = list[textIdx].copy(xNorm = nx, yNorm = ny)
@@ -1255,13 +1265,13 @@ private fun PdfSinglePageTouchStudioDialog(
                                                         type = PdfAnnotationType.TEXT,
                                                         xNorm = nx,
                                                         yNorm = ny,
-                                                        text = annotationDraftText.ifBlank { "Nota" },
+                                                        text = currentAnnotationDraftText.ifBlank { "Nota" },
                                                         colorArgb = 0xFF1E3A8A.toInt(),
                                                         fontSizePt = 14f
                                                     )
                                                 )
                                             }
-                                            onUpdateItem(item.copy(annotations = list))
+                                            currentOnUpdateItem(cur.copy(annotations = list))
                                         },
                                         onDrag = { change, _ ->
                                             change.consume()
@@ -1271,19 +1281,20 @@ private fun PdfSinglePageTouchStudioDialog(
                                                 bmp.width.toFloat(),
                                                 bmp.height.toFloat()
                                             )
+                                            val cur = currentItem
                                             val nx = ((change.position.x - pageRect.left) / pageRect.width.coerceAtLeast(1f)).coerceIn(0.05f, 0.90f)
                                             val ny = ((change.position.y - pageRect.top) / pageRect.height.coerceAtLeast(1f)).coerceIn(0.05f, 0.94f)
-                                            val list = item.annotations.toMutableList()
+                                            val list = cur.annotations.toMutableList()
                                             val textIdx = list.indexOfLast { it.type != PdfAnnotationType.HIGHLIGHTER }
                                             if (textIdx >= 0) {
                                                 list[textIdx] = list[textIdx].copy(xNorm = nx, yNorm = ny)
-                                                onUpdateItem(item.copy(annotations = list))
+                                                currentOnUpdateItem(cur.copy(annotations = list))
                                             }
                                         }
                                     )
                                 }
                                 // Modo Escáner de 4 Esquinas con Lupa 2.5x
-                                .pointerInput(toolMode, item, bmp) {
+                                .pointerInput(toolMode, bmp) {
                                     if (toolMode != PdfTouchToolMode.SCANNER_4CORNERS) return@pointerInput
                                     detectDragGestures(
                                         onDragStart = { touch ->
@@ -1293,15 +1304,16 @@ private fun PdfSinglePageTouchStudioDialog(
                                                 bmp.width.toFloat(),
                                                 bmp.height.toFloat()
                                             )
-                                            val q = item.perspectiveQuad
+                                            val q = currentItem.perspectiveQuad
                                             val pts = listOf(
                                                 Offset(pageRect.left + q.tlX * pageRect.width, pageRect.top + q.tlY * pageRect.height),
                                                 Offset(pageRect.left + q.trX * pageRect.width, pageRect.top + q.trY * pageRect.height),
                                                 Offset(pageRect.left + q.brX * pageRect.width, pageRect.top + q.brY * pageRect.height),
                                                 Offset(pageRect.left + q.blX * pageRect.width, pageRect.top + q.blY * pageRect.height)
                                             )
+                                            val hitR = 42.dp.toPx().toDouble()
                                             activeScannerCorner = pts.indexOfFirst {
-                                                hypot((it.x - touch.x).toDouble(), (it.y - touch.y).toDouble()) <= 54.0
+                                                hypot((it.x - touch.x).toDouble(), (it.y - touch.y).toDouble()) <= hitR
                                             }
                                         },
                                         onDragEnd = {
@@ -1321,17 +1333,18 @@ private fun PdfSinglePageTouchStudioDialog(
                                                 bmp.width.toFloat(),
                                                 bmp.height.toFloat()
                                             )
+                                            val cur = currentItem
                                             val nx = ((change.position.x - pageRect.left) / pageRect.width.coerceAtLeast(1f)).coerceIn(0f, 1f)
                                             val ny = ((change.position.y - pageRect.top) / pageRect.height.coerceAtLeast(1f)).coerceIn(0f, 1f)
                                             activeLoupeNorm = Offset(nx, ny)
-                                            val q = item.perspectiveQuad
+                                            val q = cur.perspectiveQuad
                                             val nextQuad = when (activeScannerCorner) {
                                                 0 -> q.copy(tlX = nx, tlY = ny)
                                                 1 -> q.copy(trX = nx, trY = ny)
                                                 2 -> q.copy(brX = nx, brY = ny)
                                                 else -> q.copy(blX = nx, blY = ny)
                                             }
-                                            onUpdateItem(item.copy(perspectiveQuad = nextQuad))
+                                            currentOnUpdateItem(cur.copy(perspectiveQuad = nextQuad))
                                         }
                                     )
                                 }
