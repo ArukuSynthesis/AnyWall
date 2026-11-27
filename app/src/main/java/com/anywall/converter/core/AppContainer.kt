@@ -10,11 +10,9 @@ import com.anywall.converter.data.engines.MediaEngineImpl
 import com.anywall.converter.data.engines.WebViewPdfGenerator
 import com.anywall.converter.data.local.AnyWallDatabase
 import com.anywall.converter.data.local.ConversionHistoryRepositoryImpl
-import com.anywall.converter.data.local.ConversionPresetRepositoryImpl
 import com.anywall.converter.domain.engine.ConverterEngineRegistry
 import com.anywall.converter.domain.engine.FileConverterEngine
 import com.anywall.converter.domain.repository.ConversionHistoryRepository
-import com.anywall.converter.domain.repository.ConversionPresetRepository
 import com.anywall.converter.workers.ConversionWorkScheduler
 
 /**
@@ -53,12 +51,6 @@ class AppContainer(context: Context) {
         ConversionHistoryRepositoryImpl(
             dao = database.conversionHistoryDao(),
             storageManager = scopedStorageManager
-        )
-    }
-
-    val presetRepository: ConversionPresetRepository by lazy {
-        ConversionPresetRepositoryImpl(
-            dao = database.conversionPresetDao()
         )
     }
 

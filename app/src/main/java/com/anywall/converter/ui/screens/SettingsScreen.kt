@@ -136,7 +136,7 @@ fun SettingsScreen(
                             fontWeight = FontWeight.ExtraBold
                         )
                         Text(
-                            text = "AnyWall v0.5 • ${AnyWallCreditsCatalog.DEVELOPER_NAME}",
+                            text = "AnyWall v0.6 • ${AnyWallCreditsCatalog.DEVELOPER_NAME}",
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -197,15 +197,15 @@ fun SettingsScreen(
                             }
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    text = "AnyWall: Universal Converter v0.5",
+                                    text = "AnyWall: Universal Converter v0.6",
                                     style = MaterialTheme.typography.titleMedium,
                                     fontWeight = FontWeight.ExtraBold
                                 )
                                 Text(
                                     text = if (isEn) {
-                                        "By ${AnyWallCreditsCatalog.DEVELOPER_NAME} • Build 5 (AGPL-3.0-only)"
+                                        "By ${AnyWallCreditsCatalog.DEVELOPER_NAME} • Build 6 (AGPL-3.0-only)"
                                     } else {
-                                        "Por ${AnyWallCreditsCatalog.DEVELOPER_NAME} • Build 5 (AGPL-3.0-only)"
+                                        "Por ${AnyWallCreditsCatalog.DEVELOPER_NAME} • Build 6 (AGPL-3.0-only)"
                                     },
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant

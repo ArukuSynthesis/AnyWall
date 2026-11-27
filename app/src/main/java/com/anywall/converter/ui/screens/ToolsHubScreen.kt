@@ -8,9 +8,11 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -19,6 +21,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowForwardIos
 import androidx.compose.material.icons.filled.AutoFixHigh
 import androidx.compose.material.icons.filled.ContentCut
 import androidx.compose.material.icons.filled.Crop
@@ -80,14 +83,13 @@ private enum class StudioLaunchTarget {
 }
 
 /**
- * Pestaña dedicada a los **6 Estudios Táctiles y de Lote** (`ToolsHubScreen` - v0.5):
+ * Pestaña dedicada a los **6 Estudios Táctiles y de Lote** (`ToolsHubScreen` - v0.6 UX):
  * - Estudio de Fotos Táctil
  * - Estudio PDF, Firma y Anotaciones
  * - Línea de Tiempo de Video y Audio (Trim + Captura de fotograma exacto)
  * - Recorte Táctil de Encuadre de Video (Crop)
  * - Explorador `.RAR` / `.ZIP` / `.7Z` y Re-empaquetado en 1 paso
  * - Renombrador Masivo por Lote
- * (Las utilidades de Inspección, Duplicados `SHA-256`, QR y Datos/Bóveda viven en su propia pestaña `SecurityAndDataScreen`).
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -105,6 +107,7 @@ fun ToolsHubScreen(
     onUpdatePdfSignaturePngPath: (String) -> Unit,
     onUpdateTrimRangeMillis: (Long, Long) -> Unit,
     onUpdateVideoCropSpec: (VideoCropSpec) -> Unit,
+    onUpdateMuteVideoAudio: (Boolean) -> Unit = {},
     onUpdateSelectedArchiveEntries: (Set<String>) -> Unit,
     onUpdateArchivePassword: (String) -> Unit,
     onSelectTargetFormat: (SupportedFormat) -> Unit,
@@ -127,6 +130,8 @@ fun ToolsHubScreen(
             val resolved = uriResolver.resolveMultipleFiles(uris)
             if (resolved.isNotEmpty()) {
                 studioLoadedItems = resolved
+                onUpdateTrimRangeMillis(0L, 0L)
+                onUpdateVideoCropSpec(VideoCropSpec())
                 onLoadFilesIntoQueue(resolved, false)
                 activeStudioDialog = target
             }
@@ -200,6 +205,8 @@ fun ToolsHubScreen(
                     mediaFile = media,
                     initialStartMs = configureState.options.effectiveTrimStartMillis,
                     initialEndMs = configureState.options.effectiveTrimEndMillis ?: 0L,
+                    initialMuteAudio = configureState.options.muteVideoAudio,
+                    onToggleMuteAudio = onUpdateMuteVideoAudio,
                     onApplyTrim = { startMs, endMs ->
                         onUpdateTrimRangeMillis(startMs, endMs)
                         activeStudioDialog = null
@@ -326,15 +333,16 @@ fun ToolsHubScreen(
             if (configureState.inputFiles.isNotEmpty()) {
                 item {
                     Surface(
+                        onClick = onOpenConfigure,
                         shape = RoundedCornerShape(16.dp),
-                        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f),
-                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.3f)),
+                        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.60f),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)),
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(horizontal = 14.dp, vertical = 10.dp),
+                                .padding(horizontal = 14.dp, vertical = 11.dp),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
@@ -345,9 +353,27 @@ fun ToolsHubScreen(
                                     "Cola activa: ${configureState.inputFiles.size} archivo(s) listos para editar"
                                 },
                                 style = MaterialTheme.typography.labelLarge,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onPrimaryContainer
+                                fontWeight = FontWeight.ExtraBold,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                modifier = Modifier.weight(1f)
                             )
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Text(
+                                    text = if (isEn) "Open batch" else "Ver lote",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                Icon(
+                                    imageVector = Icons.AutoMirrored.Filled.ArrowForwardIos,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(11.dp)
+                                )
+                            }
                         }
                     }
                 }
@@ -356,7 +382,9 @@ fun ToolsHubScreen(
             // Fila 1 de Bento: Estudio de Fotos + Estudio PDF
             item {
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(IntrinsicSize.Max),
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     StudioBentoTile(
@@ -372,7 +400,9 @@ fun ToolsHubScreen(
                                 existingMatchPredicate = { it.format.category.name == "IMAGE" }
                             )
                         },
-                        modifier = Modifier.weight(1f)
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxHeight()
                     )
 
                     StudioBentoTile(
@@ -388,7 +418,9 @@ fun ToolsHubScreen(
                                 existingMatchPredicate = { it.format == SupportedFormat.PDF }
                             )
                         },
-                        modifier = Modifier.weight(1f)
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxHeight()
                     )
                 }
             }
@@ -396,7 +428,9 @@ fun ToolsHubScreen(
             // Fila 2 de Bento: Línea de Tiempo Video/Audio + Recorte de Encuadre de Video
             item {
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(IntrinsicSize.Max),
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     StudioBentoTile(
@@ -412,7 +446,9 @@ fun ToolsHubScreen(
                                 existingMatchPredicate = { it.format.isVideo || it.format.isAudio }
                             )
                         },
-                        modifier = Modifier.weight(1f)
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxHeight()
                     )
 
                     StudioBentoTile(
@@ -428,7 +464,9 @@ fun ToolsHubScreen(
                                 existingMatchPredicate = { it.format.isVideo }
                             )
                         },
-                        modifier = Modifier.weight(1f)
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxHeight()
                     )
                 }
             }
@@ -436,7 +474,9 @@ fun ToolsHubScreen(
             // Fila 3 de Bento: Explorador RAR/ZIP + Renombrador Masivo
             item {
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(IntrinsicSize.Max),
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     StudioBentoTile(
@@ -464,7 +504,9 @@ fun ToolsHubScreen(
                                 }
                             )
                         },
-                        modifier = Modifier.weight(1f)
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxHeight()
                     )
 
                     StudioBentoTile(
@@ -480,7 +522,9 @@ fun ToolsHubScreen(
                                 existingMatchPredicate = { true }
                             )
                         },
-                        modifier = Modifier.weight(1f)
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxHeight()
                     )
                 }
             }
@@ -511,7 +555,7 @@ private fun StudioBentoTile(
     ) {
         Column(
             modifier = Modifier
-                .fillMaxWidth()
+                .fillMaxSize()
                 .background(
                     Brush.verticalGradient(
                         colors = listOf(

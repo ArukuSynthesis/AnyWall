@@ -86,11 +86,20 @@ jobs:
         id: audit
         run: |
           TAG_NAME="${{ github.ref_type == 'tag' && github.ref_name || inputs.tag }}"
-          APK_SRC="app/build/outputs/apk/release/app-release.apk"
+          if [ -f "app/build/outputs/apk/release/app-universal-release.apk" ]; then
+            APK_SRC="app/build/outputs/apk/release/app-universal-release.apk"
+          else
+            APK_SRC="app/build/outputs/apk/release/app-release.apk"
+          fi
+          APK_ARM64_SRC="app/build/outputs/apk/release/app-arm64-v8a-release.apk"
           OUT_DIR="${RUNNER_TEMP}/release_assets"
           mkdir -p "$OUT_DIR"
           APK_DST="${OUT_DIR}/AnyWall-${TAG_NAME}-release.apk"
+          APK_ARM64_DST="${OUT_DIR}/AnyWall-${TAG_NAME}-arm64-v8a-release.apk"
           cp "$APK_SRC" "$APK_DST"
+          if [ -f "$APK_ARM64_SRC" ]; then
+            cp "$APK_ARM64_SRC" "$APK_ARM64_DST"
+          fi
 
           BUILD_TOOLS="${ANDROID_HOME}/build-tools/35.0.0"
           if [ ! -d "$BUILD_TOOLS" ]; then
@@ -99,6 +108,9 @@ jobs:
 
           echo "=== Verificando firma con apksigner ==="
           "${BUILD_TOOLS}/apksigner" verify --verbose "$APK_DST"
+          if [ -f "$APK_ARM64_DST" ]; then
+            "${BUILD_TOOLS}/apksigner" verify --verbose "$APK_ARM64_DST"
+          fi
 
           echo "=== Auditando permisos del APK final ==="
           PERMS="$("${BUILD_TOOLS}/aapt2" dump permissions "$APK_DST")"
@@ -109,16 +121,19 @@ jobs:
             exit 1
           fi
 
-          (cd "$OUT_DIR" && sha256sum "AnyWall-${TAG_NAME}-release.apk" > SHA256SUMS.txt)
-          SHA256="$(awk '{print $1}' "${OUT_DIR}/SHA256SUMS.txt")"
+          (cd "$OUT_DIR" && sha256sum *.apk > SHA256SUMS.txt)
+          SHA256="$(grep "AnyWall-${TAG_NAME}-release.apk" "${OUT_DIR}/SHA256SUMS.txt" | awk '{print $1}')"
           SIZE_HR="$(du -h "$APK_DST" | awk '{print $1}')"
+          SIZE_ARM64_HR="$( [ -f "$APK_ARM64_DST" ] && du -h "$APK_ARM64_DST" | awk '{print $1}' || echo "$SIZE_HR" )"
 
           echo "tag=${TAG_NAME}" >> "$GITHUB_OUTPUT"
           echo "apk_path=${APK_DST}" >> "$GITHUB_OUTPUT"
+          echo "apk_arm64_path=${APK_ARM64_DST}" >> "$GITHUB_OUTPUT"
           echo "sums_path=${OUT_DIR}/SHA256SUMS.txt" >> "$GITHUB_OUTPUT"
           echo "apk_name=AnyWall-${TAG_NAME}-release.apk" >> "$GITHUB_OUTPUT"
           echo "sha256=${SHA256}" >> "$GITHUB_OUTPUT"
           echo "size_hr=${SIZE_HR}" >> "$GITHUB_OUTPUT"
+          echo "size_arm64_hr=${SIZE_ARM64_HR}" >> "$GITHUB_OUTPUT"
 
       - name: Publicar GitHub Release con el APK adjunto
         env:
@@ -126,49 +141,53 @@ jobs:
         run: |
           TAG="${{ steps.audit.outputs.tag }}"
           APK_PATH="${{ steps.audit.outputs.apk_path }}"
+          APK_ARM64_PATH="${{ steps.audit.outputs.apk_arm64_path }}"
           SUMS_PATH="${{ steps.audit.outputs.sums_path }}"
           APK_NAME="${{ steps.audit.outputs.apk_name }}"
           SHA256="${{ steps.audit.outputs.sha256 }}"
           SIZE_HR="${{ steps.audit.outputs.size_hr }}"
+          SIZE_ARM64_HR="${{ steps.audit.outputs.size_arm64_hr }}"
 
           cat > "${RUNNER_TEMP}/release_notes.md" <<EOF
           ## AnyWall: Universal Converter ${TAG}
 
           Versión release compilada, firmada y auditada automáticamente de **AnyWall: Universal Converter** (\`com.anywall.converter\`), conversor universal para Android desarrollado por **SynthesizerEnd** (licencia \`AGPL-3.0-only\`).
 
-          ### Novedades de v0.5 (Rediseño Integral de UI / UX y Mejoras Táctiles)
+          ### Novedades y Optimizaciones Recientes
+          - **Optimización extrema de tamaño de APK (-67%):**
+            - **ABI Splits + R8 Tree-Shaking (\`-dontobfuscate\`) + Exclusión de tablas PQC de BouncyCastle:** reducción del APK de **27 MB** a **${SIZE_ARM64_HR}** (\`arm64-v8a\`) y **${SIZE_HR}** (\`universal\`).
+          - **Gestor Directo de Bóveda \`.anywall\` (\`AES-256-GCM\`) en Seguridad:**
+            - Cifrado directo de cualquier archivo a \`.anywall\` y desencriptado directo de \`.anywall\` a su formato original con medidor de fortaleza de contraseña y tarjeta inmediata de resultados (*Abrir / Compartir*) sin pasar por pantallas intermedias.
+          - **Tarjeta de Resultado Inmediato Post-Conversión:**
+            - Comparativa visual **Antes → Después (\`-X% ahorrado\`)**, miniaturas y botones directos de **Abrir** y **Compartir** al terminar cualquier conversión.
           - **Barra de navegación inferior moderna de 5 pestañas (\`NavigationBar\`):**
-            1. **Convertir (\`HomeScreen\`):** arranca directamente con la **Selección Rápida por Categoría y Formato Específico** (\`Imágenes\`, \`Documentos / PDF\`, \`Audio / Video\`, \`Comprimidos\`) para que el buscador solicite exclusivamente archivos del formato elegido (\`JPG\`, \`PNG\`, \`PDF\`, \`DOCX\`, \`MP4\`, \`MP3\`, \`RAR\`, \`ZIP\`, etc.), eliminando banners redundantes y presets.
-            2. **Estudios (\`ToolsHubScreen\`):** cuadrícula Bento dedicada a los **6 Estudios Táctiles y de Lote** (Estudio de Fotos, Estudio PDF y Firma, Línea de Tiempo Video/Audio, Encuadre de Video, Explorador \`.RAR\`/\`.ZIP\`/\`.7Z\` y Renombrador Masivo).
-            3. **Seguridad (\`SecurityAndDataScreen\`):** pestaña propia para **Datos Estructurados (\`JSON\`, \`CSV\`, \`XML\`, \`YAML\`, \`BASE64\`) y Bóveda Criptográfica \`AES-256-GCM\` (\`.anywall\`)** con acciones directas de **Cifrar → \`.anywall\`** y **Desencriptar \`.anywall\`**, además del espacio en pantalla completa para **Duplicados \`SHA-256\`**, **Inspector Forense de Metadatos & Hashes**, **Códigos QR (\`PNG\`/\`SVG\`)**, **Comparador \`Diff\`** y **Comparador \`Antes / Después\`**.
+            1. **Convertir (\`HomeScreen\`):** Selección Rápida por Categoría y Formato Específico (\`Imágenes\`, \`Documentos / PDF\`, \`Audio / Video\`, \`Comprimidos\`).
+            2. **Estudios (\`ToolsHubScreen\`):** cuadrícula Bento dedicada a los **6 Estudios Táctiles y de Lote** (Foto, PDF y Firma, Línea de Tiempo Video/Audio, Encuadre de Video, Explorador \`.RAR\`/\`.ZIP\`/\`.7Z\` y Renombrador Masivo).
+            3. **Seguridad (\`SecurityAndDataScreen\`):** Bóveda \`.anywall\` (\`AES-256-GCM\`), Datos Estructurados (\`JSON\`, \`CSV\`, \`XML\`, \`YAML\`, \`BASE64\`) y Utilidades Forenses (\`SHA-256\`, Inspector, QR, Diff).
             4. **Historial (\`HistoryScreen\`):** métricas de ahorro, filtro por categoría, búsqueda y multiselección.
-            5. **Ajustes (\`SettingsScreen\`):** pantalla completa nativa con muestras circulares de las 6 paletas de acento, modos Claro/Oscuro/Negro AMOLED \`#000000\`, Material You, privacidad EXIF/PIN, caché y **Actualizador desde GitHub Releases (\`GitHubUpdaterDialog\`)**.
-          - **Flujo limpio de 3 pasos en \`ConfigureScreen\`:** (1) Cola *Drag & Drop* con tarjetas minimalistas e insignias coloreadas + **Banners Contextuales de Estudios Táctiles**, (2) Selector segmentado de Formato Destino (*Convertir* vs *Comprimir/Extraer*) con estimador de peso en vivo y **Acordeones Colapsables de Opciones Avanzadas**, y (3) **Barra inferior fija (*Sticky Bottom CTA*)** para convertir o desencriptar con 1 toque.
-          - **Reproducción de video real por hardware y arrastre táctil fluido a 60 FPS:** \`MediaTimelineTrimmerDialog\` y \`VideoCropDialog\` renderizan video real con \`TextureView\` + \`MediaPlayer.setSurface\` y búsqueda en vivo, y todos los estudios táctiles (PDF firma/anotaciones, Trimmer inicio/fin + \`RangeSlider\`, Foto y cola) usan \`awaitEachGesture\` + \`rememberUpdatedState\` sin interrupciones durante el arrastre.
-
-          ### Características de v0.4 incluidas
-          - **Temas:** Sistema, Claro, Oscuro y **Negro AMOLED (\`#000000\`)**, Material You y 6 paletas de acento (Indigo Studio, Esmeralda, Ámbar, Rosa, Cian, Monocromo).
-          - **Cola inteligente:** reordenamiento *Drag & Drop*, Vista Rápida (\`QuickPeekDialog\`), estimador de tamaño de salida y **Smart Share Sheet** con acciones según MIME.
-          - **Estudio de Fotos 100% táctil:** recorte con 8 tiradores, dial de enderezado \`-45°..+45°\`, proporciones, escáner de perspectiva de 4 esquinas con lupa 2.5×, ajustes en vivo, filtros con miniaturas reales, censura con pincel/rectángulos, texto interactivo, Deshacer/Rehacer, Antes/Después y "Aplicar a todo el lote".
-          - **\`.rar\` / \`.rar5\` con \`libarchive\` (\`BSD-2-Clause\`, NDK):** exploración, extracción selectiva, contraseñas, multivolumen \`.part1.rar\`, anti-Zip-Slip y re-empaquetado en 1 paso a \`.zip\`, \`.7z\`, \`.tar.gz\`, \`.tar.xz\`, \`.tar.bz2\`. Cómics \`.cbz\`/\`.cbr\` ↔ PDF / imágenes / \`.cbz\`.
-          - **Video y audio táctil:** línea de tiempo con fotogramas o forma de onda, captura de fotograma exacto, recorte de encuadre (\`media3.effect.Crop\`), Auto-Gain \`-1.0 dBFS\` y etiquetas ID3v2.3 + carátula.
-          - **Estudio PDF táctil:** *Drag & Drop* de páginas, *pinch-to-zoom*, firma arrastrable/redimensionable, censura con el dedo, texto, sello de fecha y resaltador translúcido.
-          - **Herramientas y actualizador:** renombrador masivo con vista previa, limpiador de duplicados por \`SHA-256\` y actualizador provisional desde GitHub Releases (\`GitHubUpdaterDialog\`) con verificador local de APK + \`SHA-256\`.
+            5. **Ajustes (\`SettingsScreen\`):** 6 paletas de acento, modos Claro/Oscuro/Negro AMOLED \`#000000\`, Material You, privacidad EXIF/PIN, caché y **Actualizador desde GitHub Releases (\`GitHubUpdaterDialog\`)**.
+          - **Reproducción de video real por hardware (\`TextureView\` + \`MediaPlayer.setSurface\`) y arrastre táctil fluido a 60 FPS.**
           - **0 permisos de red** en el APK final (\`INTERNET\`, \`ACCESS_NETWORK_STATE\`, \`ACCESS_WIFI_STATE\`), auditado en CI con \`aapt2 dump permissions\`.
 
           ### Descarga e integridad
-          - **Archivo:** \`${APK_NAME}\` (${SIZE_HR}, firmado con APK Signature Scheme v2)
+          - **APK ARM64 (\`arm64-v8a\`, recomendado para móviles actuales):** \`AnyWall-${TAG}-arm64-v8a-release.apk\` (${SIZE_ARM64_HR})
+          - **APK Universal (todas las arquitecturas):** \`${APK_NAME}\` (${SIZE_HR})
           - **Android mínimo:** Android 8.0 (API 26) • **Target SDK:** Android 15 (API 35)
-          - **SHA-256:** \`${SHA256}\`
+          - **SHA-256 (Universal):** \`${SHA256}\`
           EOF
 
+          ASSETS=("$APK_PATH" "$SUMS_PATH")
+          if [ -f "$APK_ARM64_PATH" ]; then
+            ASSETS+=("$APK_ARM64_PATH")
+          fi
+
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" "$APK_PATH" "$SUMS_PATH" --clobber
+            gh release upload "$TAG" "${ASSETS[@]}" --clobber
             gh release edit "$TAG" \
               --title "AnyWall: Universal Converter ${TAG}" \
               --notes-file "${RUNNER_TEMP}/release_notes.md"
           else
-            gh release create "$TAG" "$APK_PATH" "$SUMS_PATH" \
+            gh release create "$TAG" "${ASSETS[@]}" \
               --title "AnyWall: Universal Converter ${TAG}" \
               --notes-file "${RUNNER_TEMP}/release_notes.md"
           fi

@@ -233,7 +233,7 @@ fun AboutCreditsDialog(
                                         color = MaterialTheme.colorScheme.onPrimaryContainer
                                     )
                                     Text(
-                                        text = "AnyWall: Universal Converter v0.5",
+                                        text = "AnyWall: Universal Converter v0.6",
                                         style = MaterialTheme.typography.labelMedium,
                                         color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.85f)
                                     )

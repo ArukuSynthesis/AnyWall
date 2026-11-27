@@ -16,11 +16,11 @@ import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -28,8 +28,12 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.VolumeOff
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
@@ -42,6 +46,8 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -107,13 +113,12 @@ private enum class TimelineDragTarget {
 }
 
 /**
- * Recortador Visual de Línea de Tiempo para Video y Audio (`MediaTimelineTrimmerDialog` - v0.5):
- * - Reproductor de video real por hardware (`TextureView` + `MediaPlayer.setSurface`) que muestra
- *   el video en movimiento con su relación de aspecto real y actualiza el fotograma en vivo al arrastrar.
- * - Tira de fotogramas reales para Video o Forma de Onda PCM real para Audio.
+ * Recortador Visual de Línea de Tiempo para Video y Audio (`MediaTimelineTrimmerDialog` - v0.6):
+ * - Reproductor de video real por hardware (`TextureView` + `MediaPlayer.setSurface`) con ajuste
+ *   de aspecto exacto dentro del contenedor (`BoxWithConstraints`, sin desbordar en videos 16:9).
+ * - Protección de estado `isPlayerPrepared` para evitar errores `-38` en `MediaPlayer` durante `prepareAsync()`.
  * - Dos tiradores arrastrables de Inicio y Fin con seguimiento continuo (`awaitEachGesture` + `rememberUpdatedState`)
- *   sin cancelaciones a mitad del gesto, más `RangeSlider` sincronizado de apoyo.
- * - Botón directo en Video: "Capturar fotograma exacto" guardado en `Downloads/AnyWall/`.
+ *   y `RangeSlider` sincronizado.
  */
 @Composable
 fun MediaTimelineTrimmerDialog(
@@ -121,7 +126,9 @@ fun MediaTimelineTrimmerDialog(
     initialStartMs: Long,
     initialEndMs: Long,
     onApplyTrim: (startMs: Long, endMs: Long) -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    initialMuteAudio: Boolean = false,
+    onToggleMuteAudio: ((Boolean) -> Unit)? = null
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -132,6 +139,7 @@ fun MediaTimelineTrimmerDialog(
     var endMs by remember { mutableLongStateOf(initialEndMs.coerceAtLeast(0L)) }
     var playheadMs by remember { mutableLongStateOf(initialStartMs.coerceAtLeast(0L)) }
     var videoAspectRatio by remember { mutableFloatStateOf(16f / 9f) }
+    var isMuted by remember { mutableStateOf(initialMuteAudio) }
 
     var isLoading by remember { mutableStateOf(true) }
     val frameStrip = remember { mutableStateListOf<Bitmap>() }
@@ -139,12 +147,14 @@ fun MediaTimelineTrimmerDialog(
     var statusBanner by remember { mutableStateOf<String?>(null) }
 
     var mediaPlayer by remember { mutableStateOf<MediaPlayer?>(null) }
+    var isPlayerPrepared by remember { mutableStateOf(false) }
     var videoSurface by remember { mutableStateOf<Surface?>(null) }
     var textureViewRef by remember { mutableStateOf<TextureView?>(null) }
     var isPlaying by remember { mutableStateOf(false) }
     var lastSeekWallClockMs by remember { mutableLongStateOf(0L) }
 
     fun seekPlayerSmooth(targetMs: Long, forceExact: Boolean = false) {
+        if (!isPlayerPrepared) return
         val mp = mediaPlayer ?: return
         val now = System.currentTimeMillis()
         if (!forceExact && now - lastSeekWallClockMs < 35L) return
@@ -162,6 +172,7 @@ fun MediaTimelineTrimmerDialog(
     // Liberar MediaPlayer y Surface al cerrar el diálogo
     DisposableEffect(mediaFile.uri) {
         onDispose {
+            isPlayerPrepared = false
             runCatching {
                 mediaPlayer?.setSurface(null)
                 mediaPlayer?.stop()
@@ -176,6 +187,7 @@ fun MediaTimelineTrimmerDialog(
     // Cargar metadatos, tira de fotogramas (video) o forma de onda (audio) e inicializar MediaPlayer
     LaunchedEffect(mediaFile.uri) {
         isLoading = true
+        isPlayerPrepared = false
         withContext(Dispatchers.IO) {
             val retriever = MediaMetadataRetriever()
             try {
@@ -260,12 +272,16 @@ fun MediaTimelineTrimmerDialog(
             }
         }
 
-        // Inicializar MediaPlayer en el hilo principal y enlazar Surface si ya está disponible
+        // Inicializar MediaPlayer en el hilo principal y enlazar Surface de forma segura
         runCatching {
             val mp = MediaPlayer()
             mp.setDataSource(context, mediaFile.uri)
             videoSurface?.let { mp.setSurface(it) }
             mp.setOnPreparedListener { preparedMp ->
+                isPlayerPrepared = true
+                val vol = if (isMuted) 0f else 1f
+                runCatching { preparedMp.setVolume(vol, vol) }
+                videoSurface?.let { runCatching { preparedMp.setSurface(it) } }
                 if (totalDurationMs <= 0L && preparedMp.duration > 0) {
                     totalDurationMs = preparedMp.duration.toLong()
                     if (endMs <= startMs) endMs = totalDurationMs
@@ -287,14 +303,16 @@ fun MediaTimelineTrimmerDialog(
         isLoading = false
     }
 
-    // Si la Surface de TextureView se crea después del MediaPlayer, vincularla inmediatamente
-    LaunchedEffect(videoSurface, mediaPlayer) {
+    // Si la Surface de TextureView se crea o el MediaPlayer termina de prepararse, vincular y mostrar fotograma
+    LaunchedEffect(videoSurface, mediaPlayer, isPlayerPrepared) {
         val mp = mediaPlayer
         val surf = videoSurface
         if (mp != null && surf != null) {
             runCatching {
                 mp.setSurface(surf)
-                seekPlayerSmooth(playheadMs, forceExact = true)
+                if (isPlayerPrepared) {
+                    seekPlayerSmooth(playheadMs, forceExact = true)
+                }
             }
         }
     }
@@ -303,7 +321,7 @@ fun MediaTimelineTrimmerDialog(
     LaunchedEffect(isPlaying, startMs, endMs) {
         while (isPlaying) {
             val mp = mediaPlayer
-            if (mp != null && runCatching { mp.isPlaying }.getOrDefault(false)) {
+            if (mp != null && isPlayerPrepared && runCatching { mp.isPlaying }.getOrDefault(false)) {
                 val cur = runCatching { mp.currentPosition.toLong() }.getOrDefault(playheadMs)
                 playheadMs = cur.coerceIn(startMs, endMs)
                 if (cur >= endMs) {
@@ -333,6 +351,7 @@ fun MediaTimelineTrimmerDialog(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
                     .padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
@@ -373,16 +392,21 @@ fun MediaTimelineTrimmerDialog(
                     }
                 }
 
-                // Vista previa visual real: TextureView de video con aceleración por hardware o Onda de Audio
-                Box(
+                // Vista previa visual real con ajuste exacto al contenedor (sin desbordar en 16:9 ni 9:16)
+                BoxWithConstraints(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(if (isVideo) 235.dp else 100.dp)
+                        .height(if (isVideo) 220.dp else 96.dp)
                         .clip(RoundedCornerShape(16.dp))
                         .background(Color(0xFF07090D))
-                        .border(1.dp, Color(0xFF1E293B), RoundedCornerShape(16.dp)),
+                        .border(1.dp, Color(0xFF1E293B), RoundedCornerShape(16.dp))
+                        .padding(6.dp),
                     contentAlignment = Alignment.Center
                 ) {
+                    val safeAspect = videoAspectRatio.coerceIn(0.35f, 2.8f)
+                    val fitW = if (maxWidth / safeAspect <= maxHeight) maxWidth else maxHeight * safeAspect
+                    val fitH = if (maxWidth / safeAspect <= maxHeight) maxWidth / safeAspect else maxHeight
+
                     if (isVideo) {
                         AndroidView(
                             factory = { ctx ->
@@ -399,7 +423,9 @@ fun MediaTimelineTrimmerDialog(
                                             videoSurface = newSurf
                                             runCatching {
                                                 mediaPlayer?.setSurface(newSurf)
-                                                seekPlayerSmooth(playheadMs, forceExact = true)
+                                                if (isPlayerPrepared) {
+                                                    seekPlayerSmooth(playheadMs, forceExact = true)
+                                                }
                                             }
                                         }
 
@@ -421,9 +447,7 @@ fun MediaTimelineTrimmerDialog(
                                     textureViewRef = this
                                 }
                             },
-                            modifier = Modifier
-                                .fillMaxHeight()
-                                .aspectRatio(videoAspectRatio.coerceIn(0.4f, 2.4f), matchHeightConstraintsFirst = true)
+                            modifier = Modifier.size(fitW, fitH)
                         )
                     } else if (isLoading) {
                         CircularProgressIndicator(color = Color(0xFF6366F1))
@@ -715,113 +739,151 @@ fun MediaTimelineTrimmerDialog(
                         .height(28.dp)
                 )
 
-                // Controles de Reproducción y "Capturar fotograma exacto"
+                // Fila 1 de Controles: Reproducción, Restablecer Todo y Silenciar Audio (Mute)
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        FilledTonalButton(
-                            onClick = {
-                                val mp = mediaPlayer
-                                if (mp != null) {
-                                    if (isPlaying) {
-                                        runCatching { mp.pause() }
-                                        isPlaying = false
-                                    } else {
-                                        if (playheadMs < startMs || playheadMs >= endMs - 100L) {
-                                            playheadMs = startMs
-                                        }
-                                        seekPlayerSmooth(playheadMs, forceExact = true)
-                                        runCatching { mp.start() }
-                                        isPlaying = true
+                    FilledTonalButton(
+                        onClick = {
+                            val mp = mediaPlayer
+                            if (mp != null && isPlayerPrepared) {
+                                if (isPlaying) {
+                                    runCatching { mp.pause() }
+                                    isPlaying = false
+                                } else {
+                                    if (playheadMs < startMs || playheadMs >= endMs - 100L) {
+                                        playheadMs = startMs
                                     }
+                                    seekPlayerSmooth(playheadMs, forceExact = true)
+                                    runCatching { mp.start() }
+                                    isPlaying = true
                                 }
                             }
-                        ) {
-                            Icon(
-                                imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                                contentDescription = null,
-                                modifier = Modifier.size(18.dp)
-                            )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text(if (isPlaying) "Pausar" else "Probar tramo")
-                        }
-
-                        OutlinedButton(
-                            onClick = {
-                                startMs = 0L
-                                endMs = totalDurationMs
-                                playheadMs = 0L
-                                runCatching {
-                                    mediaPlayer?.pause()
-                                    seekPlayerSmooth(0L, forceExact = true)
-                                }
-                                isPlaying = false
-                            },
-                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
-                        ) {
-                            Icon(Icons.Default.RestartAlt, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("Todo", color = Color.White)
-                        }
+                        },
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(
+                            imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = if (isPlaying) "Pausar" else "Probar tramo",
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
                     }
 
-                    // Botón directo: "Capturar fotograma exacto" para videos
-                    if (isVideo) {
-                        FilledTonalButton(
-                            onClick = {
-                                val targetTimeMs = playheadMs
-                                val liveTextureBmp = runCatching { textureViewRef?.bitmap }.getOrNull()
-                                scope.launch {
-                                    val savedMsg = withContext(Dispatchers.IO) {
-                                        val retriever = MediaMetadataRetriever()
-                                        try {
-                                            val hiResFrame = runCatching {
-                                                retriever.setDataSource(context, mediaFile.uri)
-                                                retriever.getFrameAtTime(
-                                                    targetTimeMs * 1000L,
-                                                    MediaMetadataRetriever.OPTION_CLOSEST
-                                                )
-                                            }.getOrNull() ?: liveTextureBmp
-                                            if (hiResFrame != null) {
-                                                val bos = ByteArrayOutputStream()
-                                                hiResFrame.compress(Bitmap.CompressFormat.PNG, 100, bos)
-                                                val pngBytes = bos.toByteArray()
-                                                val baseName = mediaFile.nameWithoutExtension.ifBlank { "video" }
-                                                val fileName = "${baseName}_frame_${targetTimeMs}ms.png"
-                                                val saved = ScopedStorageManager(context).saveStreamToDownloads(
-                                                    inputStream = ByteArrayInputStream(pngBytes),
-                                                    desiredDisplayName = fileName,
-                                                    mimeType = "image/png",
-                                                    knownSizeBytes = pngBytes.size.toLong()
-                                                )
-                                                "Fotograma guardado en Downloads/AnyWall/${saved.displayName}"
-                                            } else {
-                                                "No fue posible extraer el fotograma actual."
-                                            }
-                                        } catch (e: Exception) {
-                                            "Error al guardar fotograma: ${e.message}"
-                                        } finally {
-                                            runCatching { retriever.release() }
-                                        }
-                                    }
-                                    statusBanner = savedMsg
-                                }
+                    OutlinedButton(
+                        onClick = {
+                            startMs = 0L
+                            endMs = totalDurationMs
+                            playheadMs = 0L
+                            runCatching {
+                                mediaPlayer?.pause()
+                                seekPlayerSmooth(0L, forceExact = true)
                             }
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.CameraAlt,
-                                contentDescription = null,
-                                modifier = Modifier.size(16.dp)
+                            isPlaying = false
+                        },
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                    ) {
+                        Icon(Icons.Default.RestartAlt, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Todo", color = Color.White, maxLines = 1)
+                    }
+
+                    if (isVideo && onToggleMuteAudio != null) {
+                        FilterChip(
+                            selected = isMuted,
+                            onClick = {
+                                val next = !isMuted
+                                isMuted = next
+                                val vol = if (next) 0f else 1f
+                                if (isPlayerPrepared) {
+                                    runCatching { mediaPlayer?.setVolume(vol, vol) }
+                                }
+                                onToggleMuteAudio(next)
+                            },
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = if (isMuted) Icons.AutoMirrored.Filled.VolumeOff else Icons.AutoMirrored.Filled.VolumeUp,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            },
+                            label = {
+                                Text(if (isMuted) "Sin audio" else "Audio ON", maxLines = 1)
+                            },
+                            colors = FilterChipDefaults.filterChipColors(
+                                labelColor = Color.White,
+                                iconColor = Color.White,
+                                selectedContainerColor = Color(0xFFEF4444),
+                                selectedLabelColor = Color.White,
+                                selectedLeadingIconColor = Color.White
                             )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                text = stringResource(R.string.btn_capture_exact_frame),
-                                style = MaterialTheme.typography.labelMedium
-                            )
-                        }
+                        )
+                    }
+                }
+
+                // Fila 2 (solo Video): Botón de ancho completo para "Capturar fotograma exacto"
+                if (isVideo) {
+                    FilledTonalButton(
+                        onClick = {
+                            val targetTimeMs = playheadMs
+                            val liveTextureBmp = runCatching { textureViewRef?.bitmap }.getOrNull()
+                            scope.launch {
+                                val savedMsg = withContext(Dispatchers.IO) {
+                                    val retriever = MediaMetadataRetriever()
+                                    try {
+                                        val hiResFrame = runCatching {
+                                            retriever.setDataSource(context, mediaFile.uri)
+                                            retriever.getFrameAtTime(
+                                                targetTimeMs * 1000L,
+                                                MediaMetadataRetriever.OPTION_CLOSEST
+                                            )
+                                        }.getOrNull() ?: liveTextureBmp
+                                        if (hiResFrame != null) {
+                                            val bos = ByteArrayOutputStream()
+                                            hiResFrame.compress(Bitmap.CompressFormat.PNG, 100, bos)
+                                            val pngBytes = bos.toByteArray()
+                                            val baseName = mediaFile.nameWithoutExtension.ifBlank { "video" }
+                                            val fileName = "${baseName}_frame_${targetTimeMs}ms.png"
+                                            val saved = ScopedStorageManager(context).saveStreamToDownloads(
+                                                inputStream = ByteArrayInputStream(pngBytes),
+                                                desiredDisplayName = fileName,
+                                                mimeType = "image/png",
+                                                knownSizeBytes = pngBytes.size.toLong()
+                                            )
+                                            "Fotograma guardado en Downloads/AnyWall/${saved.displayName}"
+                                        } else {
+                                            "No fue posible extraer el fotograma actual."
+                                        }
+                                    } catch (e: Exception) {
+                                        "Error al guardar fotograma: ${e.message}"
+                                    } finally {
+                                        runCatching { retriever.release() }
+                                    }
+                                }
+                                statusBanner = savedMsg
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.CameraAlt,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = stringResource(R.string.btn_capture_exact_frame),
+                            style = MaterialTheme.typography.labelLarge,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
                     }
                 }
 

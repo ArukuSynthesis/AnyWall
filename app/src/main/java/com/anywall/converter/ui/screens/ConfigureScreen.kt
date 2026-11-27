@@ -102,7 +102,6 @@ import com.anywall.converter.data.engines.ForensicMetadataHelper
 import com.anywall.converter.domain.model.ArchiveCompressionLevel
 import com.anywall.converter.domain.model.AudioBitrateKbps
 import com.anywall.converter.domain.model.AudioMetadataSpec
-import com.anywall.converter.domain.model.ConversionPreset
 import com.anywall.converter.domain.model.FormatCategory
 import com.anywall.converter.domain.model.ImageBatchLayoutMode
 import com.anywall.converter.domain.model.ImageEditSpec
@@ -125,7 +124,6 @@ import com.anywall.converter.ui.components.FormatChipSelector
 import com.anywall.converter.ui.components.ImageVisualEditorDialog
 import com.anywall.converter.ui.components.InputFileCard
 import com.anywall.converter.ui.components.MediaTimelineTrimmerDialog
-import com.anywall.converter.ui.components.OfflineToolsSheetDialog
 import com.anywall.converter.ui.components.PdfVisualEditorDialog
 import com.anywall.converter.ui.components.QuickPeekDialog
 import com.anywall.converter.ui.components.ShareQuickActionType
@@ -151,7 +149,7 @@ import kotlin.math.roundToInt
 @Composable
 fun ConfigureScreen(
     state: ConfigureUiState,
-    presets: List<ConversionPreset>,
+    recentHistory: List<com.anywall.converter.domain.model.HistoryRecord> = emptyList(),
     thumbnailLoader: LocalThumbnailLoader?,
     uriResolver: UriFileResolver,
     storageManager: ScopedStorageManager,
@@ -169,8 +167,6 @@ fun ConfigureScreen(
     onSortByName: () -> Unit,
     onSortBySize: () -> Unit,
     onReverseOrder: () -> Unit,
-    onApplyPreset: (ConversionPreset) -> Unit,
-    onSaveNewPreset: (String, String) -> Unit,
     onApplyVisualPdfEdits: (List<PdfPageEditItem>) -> Unit,
     onClearVisualPdfEdits: () -> Unit,
     onApplyVisualImageEdits: (ImageEditSpec) -> Unit,
@@ -235,10 +231,7 @@ fun ConfigureScreen(
     var showSignaturePad by remember { mutableStateOf(false) }
     var showVisualImageEditor by remember { mutableStateOf(false) }
     var showArchivePreview by remember { mutableStateOf(false) }
-    var showToolsDialog by remember { mutableStateOf(false) }
-    var toolsInitialTab by remember { mutableIntStateOf(0) }
-    var showSavePresetDialog by remember { mutableStateOf(false) }
-    var newPresetName by remember { mutableStateOf("") }
+
     var pendingCameraUri by remember { mutableStateOf<Uri?>(null) }
 
     var quickPeekItem by remember { mutableStateOf<InputFileItem?>(null) }
@@ -397,6 +390,8 @@ fun ConfigureScreen(
             mediaFile = firstMediaFile,
             initialStartMs = state.options.effectiveTrimStartMillis,
             initialEndMs = state.options.effectiveTrimEndMillis ?: 0L,
+            initialMuteAudio = state.options.muteVideoAudio,
+            onToggleMuteAudio = onUpdateMuteVideoAudio,
             onApplyTrim = { startMs, endMs ->
                 onUpdateTrimRangeMillis(startMs, endMs)
                 showMediaTimelineTrimmer = false
@@ -490,63 +485,6 @@ fun ConfigureScreen(
         )
     }
 
-    if (showToolsDialog) {
-        OfflineToolsSheetDialog(
-            initialTabIndex = toolsInitialTab,
-            loadedInputs = state.inputFiles,
-            currentImageEditSpec = state.options.imageEditSpec,
-            currentQualityPercent = state.options.clampedQuality,
-            uriResolver = uriResolver,
-            storageManager = storageManager,
-            forensicHelper = forensicHelper,
-            onDeduplicateQueue = onReplaceInputFilesList,
-            onDismiss = { showToolsDialog = false }
-        )
-    }
-
-    if (showSavePresetDialog) {
-        AlertDialog(
-            onDismissRequest = { showSavePresetDialog = false },
-            title = { Text("Guardar Perfil Rápido (Preset)", fontWeight = FontWeight.Bold) },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(
-                        text = "Guarda el formato destino (${state.selectedTargetFormat?.label ?: ""}) y las opciones actuales para reutilizarlos con un toque:",
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                    OutlinedTextField(
-                        value = newPresetName,
-                        onValueChange = { newPresetName = it },
-                        singleLine = true,
-                        label = { Text("Nombre del perfil (ej. WebP 80% sin EXIF)") },
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        if (newPresetName.isNotBlank()) {
-                            onSaveNewPreset(
-                                newPresetName.trim(),
-                                "Destino: ${state.selectedTargetFormat?.label ?: ""}"
-                            )
-                            newPresetName = ""
-                            showSavePresetDialog = false
-                        }
-                    }
-                ) {
-                    Text("Guardar")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showSavePresetDialog = false }) {
-                    Text("Cancelar")
-                }
-            }
-        )
-    }
-
     // ==================== ESTRUCTURA PRINCIPAL v0.5 ====================
 
     val allVaultsInQueue = state.inputFiles.isNotEmpty() && state.inputFiles.all { it.format == SupportedFormat.ANYWALL_VAULT }
@@ -630,7 +568,6 @@ fun ConfigureScreen(
                     isDecryptingVault = allVaultsInQueue,
                     estimateRange = state.outputSizeEstimate?.formattedRange,
                     estimateSavingsBadge = state.outputSizeEstimate?.formattedSavingsBadge,
-                    onSavePreset = { showSavePresetDialog = true },
                     onStartConversion = onStartConversion
                 )
             }
@@ -668,13 +605,15 @@ fun ConfigureScreen(
                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
-                // Progreso activo si se está ejecutando una tarea
-                if (state.activeJob.isRunning) {
+                // Progreso activo o tarjeta de resultado inmediato post-conversión
+                if (state.activeJob.isRunning || state.activeJob.isCompleted || state.activeJob.isFailed) {
                     item {
                         ConversionProgressCard(
                             jobState = state.activeJob,
                             onCancel = onCancelConversion,
-                            onOpenHistory = onNavigateToHistory
+                            onOpenHistory = onNavigateToHistory,
+                            latestCompletedRecords = recentHistory,
+                            thumbnailLoader = thumbnailLoader
                         )
                     }
                 }
@@ -1034,6 +973,33 @@ fun ConfigureScreen(
                                         enabled = !isRunning
                                     )
                                 }
+
+                                // Si hay 2 o más imágenes y la salida es Imagen, mostrar Unir en Tira / Collage directamente
+                                if (state.inputFiles.size > 1 &&
+                                    state.inputFiles.all { it.format.category == FormatCategory.IMAGE } &&
+                                    state.selectedTargetFormat?.category == FormatCategory.IMAGE
+                                ) {
+                                    HorizontalDivider()
+                                    Text(
+                                        text = "Disposición del lote (${state.inputFiles.size} imágenes)",
+                                        style = MaterialTheme.typography.labelLarge,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                    FlowRow(
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        ImageBatchLayoutMode.entries.forEach { layoutMode ->
+                                            FilterChip(
+                                                selected = state.options.imageBatchLayoutMode == layoutMode,
+                                                onClick = { onUpdateImageBatchLayoutMode(layoutMode) },
+                                                enabled = !isRunning,
+                                                shape = RoundedCornerShape(10.dp),
+                                                label = { Text(layoutMode.labelEs) }
+                                            )
+                                        }
+                                    }
+                                }
                             }
 
                             if (state.showMultiFileMergePdfToggle) {
@@ -1156,7 +1122,7 @@ fun ConfigureScreen(
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     Text(
-                                        text = "Silenciar pista de audio",
+                                        text = "Silenciar pista de audio (Mute)",
                                         style = MaterialTheme.typography.bodyMedium,
                                         fontWeight = FontWeight.SemiBold
                                     )
@@ -1165,6 +1131,21 @@ fun ConfigureScreen(
                                         onCheckedChange = onUpdateMuteVideoAudio,
                                         enabled = !isRunning
                                     )
+                                }
+                                Text(
+                                    text = "Velocidad de reproducción",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    listOf(0.5f to "0.5x", 1.0f to "1x", 1.25f to "1.25x", 1.5f to "1.5x", 2.0f to "2x").forEach { (spd, lbl) ->
+                                        FilterChip(
+                                            selected = state.options.videoPlaybackSpeedFactor == spd,
+                                            onClick = { onUpdateVideoPlaybackSpeed(spd) },
+                                            enabled = !isRunning,
+                                            label = { Text(lbl) }
+                                        )
+                                    }
                                 }
                             }
 
@@ -1205,6 +1186,36 @@ fun ConfigureScreen(
                                     Switch(
                                         checked = state.options.audioNormalizeAutoGain,
                                         onCheckedChange = onUpdateAudioNormalizeAutoGain,
+                                        enabled = !isRunning
+                                    )
+                                }
+                            }
+
+                            if (state.inputFiles.size > 1 &&
+                                state.inputFiles.all { it.format.isVideo || it.format.isAudio } &&
+                                (state.selectedTargetFormat?.isVideo == true || state.selectedTargetFormat?.isAudio == true)
+                            ) {
+                                HorizontalDivider()
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = "Unir los ${state.inputFiles.size} clips en 1 sola pista",
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            fontWeight = FontWeight.SemiBold
+                                        )
+                                        Text(
+                                            text = "Concatena los clips siguiendo el orden actual de la cola",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                    Switch(
+                                        checked = state.options.mergeMediaSequence,
+                                        onCheckedChange = onUpdateMergeMediaSequence,
                                         enabled = !isRunning
                                     )
                                 }
@@ -2081,7 +2092,6 @@ private fun StickyConversionBottomBar(
     isDecryptingVault: Boolean = false,
     estimateRange: String?,
     estimateSavingsBadge: String?,
-    onSavePreset: () -> Unit,
     onStartConversion: () -> Unit
 ) {
     Surface(

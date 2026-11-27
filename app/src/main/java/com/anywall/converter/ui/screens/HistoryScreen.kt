@@ -239,20 +239,12 @@ fun HistoryScreen(
                             Text(
                                 text = "Historial de Conversiones",
                                 style = MaterialTheme.typography.titleLarge,
-                                fontWeight = FontWeight.Bold
+                                fontWeight = FontWeight.ExtraBold
                             )
                             Text(
-                                text = "Carpeta: Downloads/AnyWall/ • ${records.size} ${if (records.size == 1) "archivo" else "archivos"}",
+                                text = "Downloads/AnyWall/ • ${records.size} ${if (records.size == 1) "archivo" else "archivos"}",
                                 style = MaterialTheme.typography.labelMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    },
-                    navigationIcon = {
-                        IconButton(onClick = onNavigateBack) {
-                            Icon(
-                                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                                contentDescription = "Volver"
                             )
                         }
                     },
@@ -365,46 +357,32 @@ fun HistoryScreen(
                     .fillMaxSize()
                     .padding(innerPadding)
             ) {
-                // Tarjeta de Estadísticas Locales de Ahorro (v0.3)
+                // Panel Bento de 3 Métricas (Archivos, Volumen Generado, Espacio Ahorrado)
                 if (allRecordsForStats.isNotEmpty()) {
-                    Card(
+                    Row(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(horizontal = 16.dp, vertical = 6.dp),
-                        shape = RoundedCornerShape(16.dp),
-                        colors = CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
-                        )
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 14.dp, vertical = 10.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(
-                                    imageVector = Icons.Default.Savings,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.size(24.dp)
-                                )
-                                Spacer(modifier = Modifier.width(10.dp))
-                                Column {
-                                    Text(
-                                        text = "Estadísticas: ${allRecordsForStats.size} conversiones",
-                                        style = MaterialTheme.typography.labelLarge,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                    Text(
-                                        text = "Espacio ahorrado: ${InputFileItem.formatBytes(totalSavedBytes)} • Generado: ${InputFileItem.formatBytes(totalGeneratedBytes)}",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                            }
-                        }
+                        HistoryStatMetricTile(
+                            label = "Convertidos",
+                            value = allRecordsForStats.size.toString(),
+                            highlightColor = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.weight(1f)
+                        )
+                        HistoryStatMetricTile(
+                            label = "Generado",
+                            value = InputFileItem.formatBytes(totalGeneratedBytes),
+                            highlightColor = MaterialTheme.colorScheme.secondary,
+                            modifier = Modifier.weight(1f)
+                        )
+                        HistoryStatMetricTile(
+                            label = "Ahorrado",
+                            value = InputFileItem.formatBytes(totalSavedBytes),
+                            highlightColor = MaterialTheme.colorScheme.tertiary,
+                            modifier = Modifier.weight(1f)
+                        )
                     }
                 }
 
@@ -513,3 +491,39 @@ fun HistoryScreen(
         }
     }
 }
+
+@Composable
+private fun HistoryStatMetricTile(
+    label: String,
+    value: String,
+    highlightColor: androidx.compose.ui.graphics.Color,
+    modifier: Modifier = Modifier
+) {
+    androidx.compose.material3.Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+        border = androidx.compose.foundation.BorderStroke(1.dp, highlightColor.copy(alpha = 0.28f))
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp)
+        ) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text(
+                text = value,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.ExtraBold,
+                color = highlightColor,
+                maxLines = 1
+            )
+        }
+    }
+}
+

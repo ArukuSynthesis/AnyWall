@@ -13,11 +13,10 @@ import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -26,6 +25,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
@@ -78,6 +78,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlin.math.abs
 import kotlin.math.hypot
+import kotlin.math.min
 
 private enum class VideoCropHandle {
     NONE,
@@ -93,9 +94,10 @@ private enum class VideoCropHandle {
 }
 
 /**
- * Recorte Táctil de Encuadre de Video (`VideoCropDialog` - v0.5):
+ * Recorte Táctil de Encuadre de Video (`VideoCropDialog` - v0.6):
  * - Reproduce el video real por hardware (`TextureView` + `MediaPlayer.setSurface`) directamente
- *   detrás de la rejilla interactiva de 8 tiradores táctiles, con botón de Reproducir / Pausar.
+ *   detrás de la rejilla interactiva de 8 tiradores táctiles, ajustado con `BoxWithConstraints`
+ *   para que el 100% del fotograma y los 8 tiradores entren siempre en pantalla (tanto en 16:9 como en 9:16).
  * - Arrastre continuo a 60 FPS (`awaitEachGesture` + `rememberUpdatedState`) sin cancelaciones.
  * - El resultado `VideoCropSpec` se aplica en `MediaEngineImpl` mediante `androidx.media3.effect.Crop`.
  */
@@ -111,11 +113,13 @@ fun VideoCropDialog(
     var cropSpec by remember(initialCropSpec) { mutableStateOf(initialCropSpec) }
     var videoAspect by remember { mutableFloatStateOf(16f / 9f) }
     var mediaPlayer by remember { mutableStateOf<MediaPlayer?>(null) }
+    var isPlayerPrepared by remember { mutableStateOf(false) }
     var videoSurface by remember { mutableStateOf<Surface?>(null) }
     var isPlaying by remember { mutableStateOf(false) }
 
     DisposableEffect(videoFile.uri) {
         onDispose {
+            isPlayerPrepared = false
             runCatching {
                 mediaPlayer?.setSurface(null)
                 mediaPlayer?.stop()
@@ -128,6 +132,7 @@ fun VideoCropDialog(
     }
 
     LaunchedEffect(videoFile.uri, sampleTimeMs) {
+        isPlayerPrepared = false
         val aspect = withContext(Dispatchers.IO) {
             val retriever = MediaMetadataRetriever()
             try {
@@ -154,6 +159,8 @@ fun VideoCropDialog(
             mp.isLooping = true
             videoSurface?.let { mp.setSurface(it) }
             mp.setOnPreparedListener { prepared ->
+                isPlayerPrepared = true
+                videoSurface?.let { runCatching { prepared.setSurface(it) } }
                 val startSeek = sampleTimeMs.coerceAtLeast(0L)
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                     prepared.seekTo(startSeek, MediaPlayer.SEEK_CLOSEST)
@@ -168,7 +175,7 @@ fun VideoCropDialog(
         }
     }
 
-    LaunchedEffect(videoSurface, mediaPlayer) {
+    LaunchedEffect(videoSurface, mediaPlayer, isPlayerPrepared) {
         val mp = mediaPlayer
         val surf = videoSurface
         if (mp != null && surf != null) {
@@ -193,6 +200,7 @@ fun VideoCropDialog(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
                     .padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
@@ -233,20 +241,22 @@ fun VideoCropDialog(
                     }
                 }
 
-                // Contenedor con el video en vivo por hardware + overlay táctil de 8 tiradores exactamente encima
-                Box(
+                // Contenedor con BoxWithConstraints para que el video 16:9 o 9:16 y sus 8 tiradores entren siempre al 100%
+                BoxWithConstraints(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(310.dp)
+                        .height(290.dp)
                         .clip(RoundedCornerShape(14.dp))
                         .background(Color(0xFF07090D))
-                        .padding(10.dp),
+                        .padding(12.dp),
                     contentAlignment = Alignment.Center
                 ) {
+                    val safeAspect = videoAspect.coerceIn(0.35f, 2.8f)
+                    val fitW = if (maxWidth / safeAspect <= maxHeight) maxWidth else maxHeight * safeAspect
+                    val fitH = if (maxWidth / safeAspect <= maxHeight) maxWidth / safeAspect else maxHeight
+
                     Box(
-                        modifier = Modifier
-                            .fillMaxHeight()
-                            .aspectRatio(videoAspect.coerceIn(0.35f, 2.6f), matchHeightConstraintsFirst = true)
+                        modifier = Modifier.size(fitW, fitH)
                     ) {
                         AndroidView(
                             factory = { ctx ->
@@ -512,6 +522,13 @@ private fun dragVideoCropSpec(
     var r = current.rightNorm
     var b = current.bottomNorm
 
+    val isSingleEdgeHandle = handle in setOf(
+        VideoCropHandle.TOP_EDGE,
+        VideoCropHandle.BOTTOM_EDGE,
+        VideoCropHandle.LEFT_EDGE,
+        VideoCropHandle.RIGHT_EDGE
+    )
+
     when (handle) {
         VideoCropHandle.TOP_LEFT -> {
             l = (l + dx).coerceIn(0f, r - minSpan)
@@ -546,24 +563,56 @@ private fun dragVideoCropSpec(
         VideoCropHandle.NONE -> return current
     }
 
+    // Al arrastrar un borde individual (Superior/Inferior/Izquierdo/Derecho), pasar a modo Libre
+    // para que el borde siga 1:1 al dedo sin bloquearse por la proporción anterior.
+    if (isSingleEdgeHandle) {
+        return current.copy(
+            leftNorm = l,
+            topNorm = t,
+            rightNorm = r,
+            bottomNorm = b,
+            aspectPreset = CropAspectRatioPreset.FREE
+        )
+    }
+
     val updated = current.copy(leftNorm = l, topNorm = t, rightNorm = r, bottomNorm = b)
     val targetRatio = when (current.aspectPreset) {
         CropAspectRatioPreset.FREE -> null
         CropAspectRatioPreset.ORIGINAL -> videoAspect
         else -> current.aspectPreset.ratioWidthToHeight
     }
-    return if (targetRatio != null && handle != VideoCropHandle.INSIDE_MOVE) {
+
+    if (targetRatio != null && handle != VideoCropHandle.INSIDE_MOVE) {
         val normRatio = (targetRatio / videoAspect.coerceAtLeast(0.1f)).coerceIn(0.15f, 6f)
-        val curW = updated.rightNorm - updated.leftNorm
-        val desiredH = (curW / normRatio).coerceIn(minSpan, 1f)
-        val cy = ((updated.topNorm + updated.bottomNorm) / 2f).coerceIn(desiredH / 2f, 1f - desiredH / 2f)
-        updated.copy(
-            topNorm = (cy - desiredH / 2f).coerceIn(0f, 0.90f),
-            bottomNorm = (cy + desiredH / 2f).coerceIn(0.10f, 1f)
+        val anchorRight = handle == VideoCropHandle.TOP_LEFT || handle == VideoCropHandle.BOTTOM_LEFT
+        val anchorBottom = handle == VideoCropHandle.TOP_LEFT || handle == VideoCropHandle.TOP_RIGHT
+
+        val maxAllowedW = if (anchorRight) updated.rightNorm else (1f - updated.leftNorm)
+        val maxAllowedH = if (anchorBottom) updated.bottomNorm else (1f - updated.topNorm)
+
+        var newW = (updated.rightNorm - updated.leftNorm).coerceIn(minSpan, maxAllowedW)
+        var newH = newW / normRatio
+        if (newH > maxAllowedH) {
+            newH = maxAllowedH.coerceAtLeast(minSpan)
+            newW = (newH * normRatio).coerceIn(minSpan, maxAllowedW)
+        } else if (newH < minSpan) {
+            newH = minSpan
+            newW = (newH * normRatio).coerceIn(minSpan, maxAllowedW)
+        }
+
+        val finalL = if (anchorRight) (updated.rightNorm - newW).coerceIn(0f, 1f - minSpan) else updated.leftNorm
+        val finalR = if (anchorRight) updated.rightNorm else (updated.leftNorm + newW).coerceIn(minSpan, 1f)
+        val finalT = if (anchorBottom) (updated.bottomNorm - newH).coerceIn(0f, 1f - minSpan) else updated.topNorm
+        val finalB = if (anchorBottom) updated.bottomNorm else (updated.topNorm + newH).coerceIn(minSpan, 1f)
+
+        return updated.copy(
+            leftNorm = finalL,
+            topNorm = finalT,
+            rightNorm = finalR,
+            bottomNorm = finalB
         )
-    } else {
-        updated
     }
+    return updated
 }
 
 private fun applyVideoAspectPreset(

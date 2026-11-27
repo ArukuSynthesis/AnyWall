@@ -60,7 +60,6 @@ import com.anywall.converter.core.OutputSubfolderMode
 import com.anywall.converter.core.ScopedStorageManager
 import com.anywall.converter.core.UriFileResolver
 import com.anywall.converter.data.engines.ForensicMetadataHelper
-import com.anywall.converter.domain.model.ConversionPreset
 import com.anywall.converter.domain.model.FormatCategory
 import com.anywall.converter.domain.model.HistoryRecord
 import com.anywall.converter.domain.model.InputFileItem
@@ -85,7 +84,6 @@ import com.anywall.converter.ui.components.SpecificFormatPickerDialog
 fun HomeScreen(
     configureState: ConfigureUiState,
     recentHistory: List<HistoryRecord>,
-    presets: List<ConversionPreset>,
     thumbnailLoader: LocalThumbnailLoader?,
     uriResolver: UriFileResolver,
     storageManager: ScopedStorageManager,
@@ -114,7 +112,6 @@ fun HomeScreen(
     onToggleDefaultStripExif: (Boolean) -> Unit,
     onRefreshTempCacheSize: () -> Unit,
     onClearTempCacheNow: () -> Unit,
-    onApplyPreset: (ConversionPreset) -> Unit,
     onCreateCameraUri: () -> Uri,
     onFilesSelected: (List<Uri>) -> Unit,
     onFolderSelected: (Uri) -> Unit,
@@ -192,6 +189,12 @@ fun HomeScreen(
         multiDocumentLauncher.launch(option.mimeTypes)
     }
 
+    fun launchPickerForCategoryAllFormats(mimes: Array<String>) {
+        pendingFormatOption = null
+        activeCategoryForFormatDialog = null
+        multiDocumentLauncher.launch(mimes)
+    }
+
     if (showGitHubUpdaterDialog) {
         GitHubUpdaterDialog(
             isEn = isEn,
@@ -205,6 +208,7 @@ fun HomeScreen(
             category = dialogCat,
             isEnglish = isEn,
             onSelectFormatOption = { opt -> launchPickerForSpecificFormat(opt) },
+            onSelectAllCategoryFormats = { _, mimes -> launchPickerForCategoryAllFormats(mimes) },
             onDismiss = { activeCategoryForFormatDialog = null }
         )
     }
@@ -247,7 +251,7 @@ fun HomeScreen(
                                     color = MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
                                 ) {
                                     Text(
-                                        text = "v0.5",
+                                        text = "v0.6",
                                         style = MaterialTheme.typography.labelSmall,
                                         fontWeight = FontWeight.ExtraBold,
                                         color = MaterialTheme.colorScheme.primary,
@@ -283,15 +287,17 @@ fun HomeScreen(
                 .fillMaxSize()
                 .padding(innerPadding),
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp)
+            verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             // 1. Progreso de conversión en curso (si hay un trabajo activo)
-            if (configureState.activeJob.isRunning) {
+            if (configureState.activeJob.isRunning || configureState.activeJob.isCompleted || configureState.activeJob.isFailed) {
                 item {
                     ConversionProgressCard(
                         jobState = configureState.activeJob,
                         onCancel = onCancelActiveJob,
-                        onOpenHistory = onOpenHistory
+                        onOpenHistory = onOpenHistory,
+                        latestCompletedRecords = recentHistory,
+                        thumbnailLoader = thumbnailLoader
                     )
                 }
             }
@@ -356,19 +362,100 @@ fun HomeScreen(
                 }
             }
 
-            // 3. Selección Rápida por Categoría y Formato Específico (Lo primero que se ve)
+            // 3. Botones de Entrada Rápida en 1 Columna (anchos de lado a lado y bajos de altura)
+            item {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    FilledTonalButton(
+                        onClick = {
+                            pendingFormatOption = null
+                            multiDocumentLauncher.launch(arrayOf("*/*"))
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(38.dp),
+                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 0.dp),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Bolt,
+                            contentDescription = null,
+                            modifier = Modifier.size(17.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = if (isEn) "Pick Any Files" else "Elegir Archivos",
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.ExtraBold,
+                            maxLines = 1
+                        )
+                    }
+
+                    FilledTonalButton(
+                        onClick = { folderTreeLauncher.launch(null) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(38.dp),
+                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 0.dp),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.CreateNewFolder,
+                            contentDescription = null,
+                            modifier = Modifier.size(17.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = if (isEn) "Import Folder" else "Importar Carpeta",
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1
+                        )
+                    }
+
+                    FilledTonalButton(
+                        onClick = {
+                            val uri = onCreateCameraUri()
+                            pendingCameraUri = uri
+                            cameraLauncher.launch(uri)
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(38.dp),
+                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 0.dp),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.CameraAlt,
+                            contentDescription = null,
+                            modifier = Modifier.size(17.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = if (isEn) "Capture with Camera" else "Capturar con Cámara",
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1
+                        )
+                    }
+                }
+            }
+
+            // 4. Selección Rápida por Categoría y Formato Específico
             item {
                 Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     Text(
-                        text = if (isEn) "Select by Category & Format" else "Selección Rápida por Categoría",
+                        text = if (isEn) "Browse by Category & Format" else "Selección por Categoría y Formato",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.ExtraBold
                     )
                     Text(
                         text = if (isEn) {
-                            "Tap a format badge directly or tap a card to choose the exact input format"
+                            "Tap 'All', a format pill directly, or open the category sheet"
                         } else {
-                            "Toca directamente el formato que buscas o abre la categoría para elegirlo"
+                            "Toca 'Todos', un formato específico o abre la hoja de la categoría"
                         },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -381,6 +468,7 @@ fun HomeScreen(
                     category = FormatCategory.IMAGE,
                     isEnglish = isEn,
                     onClick = { activeCategoryForFormatDialog = FormatCategory.IMAGE },
+                    onQuickPickAllCategory = { _, mimes -> launchPickerForCategoryAllFormats(mimes) },
                     onQuickPickSpecificFormat = { opt -> launchPickerForSpecificFormat(opt) }
                 )
             }
@@ -390,6 +478,7 @@ fun HomeScreen(
                     category = FormatCategory.DOCUMENT,
                     isEnglish = isEn,
                     onClick = { activeCategoryForFormatDialog = FormatCategory.DOCUMENT },
+                    onQuickPickAllCategory = { _, mimes -> launchPickerForCategoryAllFormats(mimes) },
                     onQuickPickSpecificFormat = { opt -> launchPickerForSpecificFormat(opt) }
                 )
             }
@@ -399,6 +488,7 @@ fun HomeScreen(
                     category = FormatCategory.MEDIA,
                     isEnglish = isEn,
                     onClick = { activeCategoryForFormatDialog = FormatCategory.MEDIA },
+                    onQuickPickAllCategory = { _, mimes -> launchPickerForCategoryAllFormats(mimes) },
                     onQuickPickSpecificFormat = { opt -> launchPickerForSpecificFormat(opt) }
                 )
             }
@@ -408,62 +498,9 @@ fun HomeScreen(
                     category = FormatCategory.ARCHIVE,
                     isEnglish = isEn,
                     onClick = { activeCategoryForFormatDialog = FormatCategory.ARCHIVE },
+                    onQuickPickAllCategory = { _, mimes -> launchPickerForCategoryAllFormats(mimes) },
                     onQuickPickSpecificFormat = { opt -> launchPickerForSpecificFormat(opt) }
                 )
-            }
-
-            // 4. Acciones secundarias compactas: Importar Carpeta o Capturar con Cámara
-            item {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    FilledTonalButton(
-                        onClick = { folderTreeLauncher.launch(null) },
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(44.dp),
-                        shape = RoundedCornerShape(14.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.CreateNewFolder,
-                            contentDescription = null,
-                            modifier = Modifier.size(18.dp)
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = if (isEn) "Import Folder" else "Importar Carpeta",
-                            fontWeight = FontWeight.Bold,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-
-                    FilledTonalButton(
-                        onClick = {
-                            val uri = onCreateCameraUri()
-                            pendingCameraUri = uri
-                            cameraLauncher.launch(uri)
-                        },
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(44.dp),
-                        shape = RoundedCornerShape(14.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.CameraAlt,
-                            contentDescription = null,
-                            modifier = Modifier.size(18.dp)
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = if (isEn) "Camera" else "Cámara",
-                            fontWeight = FontWeight.Bold,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-                }
             }
 
             // 5. Conversiones recientes (máximo 3)

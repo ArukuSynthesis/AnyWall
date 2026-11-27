@@ -33,10 +33,20 @@ target_compile_definitions(
 target_compile_options(
     anywall_rar
     PRIVATE
+    -Os
+    -ffunction-sections
+    -fdata-sections
+    -fvisibility=hidden
     -Wno-deprecated-declarations
     -Wno-unused-parameter
     -Wno-sign-compare
-    -fvisibility=hidden
+)
+
+target_link_options(
+    anywall_rar
+    PRIVATE
+    -Wl,--gc-sections
+    -Wl,-s
 )
 
 find_library(ZLIB_LIB z)

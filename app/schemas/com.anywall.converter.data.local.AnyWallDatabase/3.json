@@ -2,7 +2,7 @@
   "formatVersion": 1,
   "database": {
     "version": 3,
-    "identityHash": "850e9f6b180522b2240e54b5d40ebb3f",
+    "identityHash": "631fbdcd7c1705840248ffe7e79ce059",
     "entities": [
       {
         "tableName": "conversion_history",
@@ -93,7 +93,7 @@
       },
       {
         "tableName": "conversion_presets",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `name` TEXT NOT NULL, `description` TEXT NOT NULL, `category` TEXT NOT NULL, `target_format` TEXT NOT NULL, `options_serialized` TEXT NOT NULL, `is_built_in` INTEGER NOT NULL, `created_at_millis` INTEGER NOT NULL)",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `name` TEXT NOT NULL, `description` TEXT NOT NULL, `target_format` TEXT NOT NULL, `options_serialized` TEXT NOT NULL, `is_built_in` INTEGER NOT NULL, `created_at_millis` INTEGER NOT NULL)",
         "fields": [
           {
             "fieldPath": "id",
@@ -110,12 +110,6 @@
           {
             "fieldPath": "description",
             "columnName": "description",
-            "affinity": "TEXT",
-            "notNull": true
-          },
-          {
-            "fieldPath": "categoryName",
-            "columnName": "category",
             "affinity": "TEXT",
             "notNull": true
           },
@@ -157,7 +151,7 @@
     "views": [],
     "setupQueries": [
       "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
-      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '850e9f6b180522b2240e54b5d40ebb3f')"
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '631fbdcd7c1705840248ffe7e79ce059')"
     ]
   }
 }

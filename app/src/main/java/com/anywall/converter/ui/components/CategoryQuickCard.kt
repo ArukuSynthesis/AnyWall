@@ -2,6 +2,7 @@ package com.anywall.converter.ui.components
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -13,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForwardIos
@@ -21,13 +23,14 @@ import androidx.compose.material.icons.filled.FolderZip
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.Security
-import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -204,126 +207,224 @@ fun specificFormatOptionsForCategory(category: FormatCategory): List<FormatSpeci
 }
 
 /**
- * Diálogo selector de formato específico antes de abrir el buscador de archivos del sistema (v0.5).
- * Garantiza que la búsqueda solicite únicamente archivos del formato elegido por el usuario.
+ * Hoja inferior moderna (`ModalBottomSheet`) para elegir un formato específico o todos los formatos
+ * de la categoría antes de abrir el selector de archivos del sistema (v0.6 UX).
  */
-@OptIn(ExperimentalLayoutApi::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun SpecificFormatPickerDialog(
     category: FormatCategory,
     isEnglish: Boolean = false,
     onSelectFormatOption: (FormatSpecificPickerOption) -> Unit,
+    onSelectAllCategoryFormats: ((FormatCategory, Array<String>) -> Unit)? = null,
     onDismiss: () -> Unit
 ) {
     val accentColor = categoryAccentColor(category)
+    val icon = categoryIcon(category)
     val options = specificFormatOptionsForCategory(category)
+    val allCategoryMimes = remember(category) {
+        options.flatMap { it.mimeTypes.toList() }.distinct().toTypedArray()
+    }
 
-    AlertDialog(
+    ModalBottomSheet(
         onDismissRequest = onDismiss,
-        title = {
-            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text(
-                    text = if (isEnglish) {
-                        "Choose format in ${category.localizedName(true)}"
-                    } else {
-                        "Elegir formato en ${category.localizedName(false)}"
-                    },
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.ExtraBold
-                )
-                Text(
-                    text = if (isEnglish) {
-                        "The file picker will request files of the selected format"
-                    } else {
-                        "El buscador solicitará archivos del formato que elijas"
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        },
-        text = {
-            FlowRow(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+        shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
+        containerColor = MaterialTheme.colorScheme.surface,
+        tonalElevation = 4.dp
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp)
+                .padding(bottom = 28.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                options.forEach { opt ->
-                    Surface(
-                        onClick = { onSelectFormatOption(opt) },
-                        shape = RoundedCornerShape(14.dp),
-                        color = accentColor.copy(alpha = 0.14f),
-                        border = BorderStroke(1.dp, accentColor.copy(alpha = 0.38f))
+                Box(
+                    modifier = Modifier
+                        .size(44.dp)
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(accentColor.copy(alpha = 0.16f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = icon,
+                        contentDescription = null,
+                        tint = accentColor,
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
+                Column {
+                    Text(
+                        text = category.localizedName(isEnglish),
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.ExtraBold
+                    )
+                    Text(
+                        text = if (isEnglish) {
+                            "Pick a specific format or browse all files in this category"
+                        } else {
+                            "Elige un formato específico o busca cualquier archivo de esta categoría"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            // Botón destacado: Todos los formatos de esta categoría
+            if (onSelectAllCategoryFormats != null) {
+                Surface(
+                    onClick = { onSelectAllCategoryFormats(category, allCategoryMimes) },
+                    shape = RoundedCornerShape(16.dp),
+                    color = accentColor.copy(alpha = 0.16f),
+                    border = BorderStroke(1.2.dp, accentColor.copy(alpha = 0.45f)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 13.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Column(
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                            verticalArrangement = Arrangement.spacedBy(2.dp)
-                        ) {
+                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                             Text(
-                                text = opt.label,
-                                style = MaterialTheme.typography.labelLarge,
+                                text = if (isEnglish) {
+                                    "All ${category.localizedName(true)} formats"
+                                } else {
+                                    "Todos los formatos de ${category.localizedName(false)}"
+                                },
+                                style = MaterialTheme.typography.titleSmall,
                                 fontWeight = FontWeight.ExtraBold,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                            Text(
-                                text = opt.extHint,
-                                style = MaterialTheme.typography.labelSmall,
                                 color = accentColor
                             )
+                            Text(
+                                text = options.joinToString(", ") { it.id },
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.ArrowForwardIos,
+                            contentDescription = null,
+                            tint = accentColor,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                }
+            }
+
+            Text(
+                text = if (isEnglish) "Filter by specific format:" else "O filtrar por un formato exacto:",
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            // Cuadrícula de 2 columnas para los formatos específicos
+            val chunkedOptions = remember(options) { options.chunked(2) }
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                chunkedOptions.forEach { rowItems ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        rowItems.forEach { opt ->
+                            Surface(
+                                onClick = { onSelectFormatOption(opt) },
+                                shape = RoundedCornerShape(16.dp),
+                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                                border = BorderStroke(1.dp, accentColor.copy(alpha = 0.28f)),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(
+                                        modifier = Modifier.weight(1f),
+                                        verticalArrangement = Arrangement.spacedBy(2.dp)
+                                    ) {
+                                        Text(
+                                            text = opt.label,
+                                            style = MaterialTheme.typography.labelLarge,
+                                            fontWeight = FontWeight.ExtraBold,
+                                            color = MaterialTheme.colorScheme.onSurface,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        Text(
+                                            text = opt.extHint,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = accentColor,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                        if (rowItems.size == 1) {
+                            Spacer(modifier = Modifier.weight(1f))
                         }
                     }
                 }
             }
-        },
-        confirmButton = {
-            TextButton(onClick = onDismiss) {
-                Text(if (isEnglish) "Cancel" else "Cancelar")
-            }
         }
-    )
+    }
 }
 
 /**
- * Tarjeta Bento Grid moderna por categoría en `HomeScreen` (v0.5),
- * con píldoras de formato específico pulsables directamente o apertura del selector de formato.
+ * Tarjeta Bento moderna por categoría en `HomeScreen` (v0.6 UX),
+ * con tira horizontal deslizable de píldoras táctiles grandes (`Todos` + formatos específicos).
  */
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun CategoryQuickCard(
     category: FormatCategory,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     isEnglish: Boolean = false,
+    onQuickPickAllCategory: ((FormatCategory, Array<String>) -> Unit)? = null,
     onQuickPickSpecificFormat: ((FormatSpecificPickerOption) -> Unit)? = null
 ) {
     val accentColor = categoryAccentColor(category)
     val icon = categoryIcon(category)
     val subtitle = categoryShortSubtitle(category, isEnglish)
-    val formatOptions = specificFormatOptionsForCategory(category)
+    val formatOptions = remember(category) { specificFormatOptionsForCategory(category) }
+    val allCategoryMimes = remember(category) {
+        formatOptions.flatMap { it.mimeTypes.toList() }.distinct().toTypedArray()
+    }
 
     Surface(
         onClick = onClick,
         modifier = modifier.fillMaxWidth(),
         shape = RoundedCornerShape(22.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.42f),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.36f),
         border = BorderStroke(
             width = 1.dp,
-            color = accentColor.copy(alpha = 0.28f)
+            color = accentColor.copy(alpha = 0.26f)
         )
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .background(
-                    Brush.verticalGradient(
+                    Brush.horizontalGradient(
                         colors = listOf(
-                            accentColor.copy(alpha = 0.12f),
+                            accentColor.copy(alpha = 0.11f),
                             Color.Transparent
                         )
                     )
                 )
-                .padding(16.dp),
-            verticalArrangement = Arrangement.SpaceBetween
+                .padding(horizontal = 15.dp, vertical = 13.dp),
+            verticalArrangement = Arrangement.spacedBy(11.dp)
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -337,8 +438,8 @@ fun CategoryQuickCard(
                 ) {
                     Box(
                         modifier = Modifier
-                            .size(44.dp)
-                            .clip(RoundedCornerShape(14.dp))
+                            .size(42.dp)
+                            .clip(RoundedCornerShape(13.dp))
                             .background(accentColor.copy(alpha = 0.18f)),
                         contentAlignment = Alignment.Center
                     ) {
@@ -346,10 +447,10 @@ fun CategoryQuickCard(
                             imageVector = icon,
                             contentDescription = category.localizedName(isEnglish),
                             tint = accentColor,
-                            modifier = Modifier.size(24.dp)
+                            modifier = Modifier.size(22.dp)
                         )
                     }
-                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
                         Text(
                             text = category.localizedName(isEnglish),
                             style = MaterialTheme.typography.titleMedium,
@@ -368,21 +469,55 @@ fun CategoryQuickCard(
                     }
                 }
 
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.ArrowForwardIos,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
-                    modifier = Modifier.size(14.dp)
-                )
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = accentColor.copy(alpha = 0.12f)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Text(
+                            text = if (isEnglish) "Formats" else "Ver todos",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = accentColor
+                        )
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.ArrowForwardIos,
+                            contentDescription = null,
+                            tint = accentColor,
+                            modifier = Modifier.size(10.dp)
+                        )
+                    }
+                }
             }
 
-            Spacer(modifier = Modifier.height(12.dp))
-
-            // Píldoras directas por formato específico
-            FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp)
+            // Tira horizontal táctil con píldoras cómodas para el pulgar ("Todos" + cada formato)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(7.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
+                if (onQuickPickAllCategory != null) {
+                    Surface(
+                        onClick = { onQuickPickAllCategory(category, allCategoryMimes) },
+                        shape = RoundedCornerShape(10.dp),
+                        color = accentColor,
+                    ) {
+                        Text(
+                            text = if (isEnglish) "All" else "Todos",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = Color.White,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                        )
+                    }
+                }
+
                 formatOptions.forEach { opt ->
                     Surface(
                         onClick = {
@@ -392,16 +527,16 @@ fun CategoryQuickCard(
                                 onClick()
                             }
                         },
-                        shape = RoundedCornerShape(9.dp),
-                        color = accentColor.copy(alpha = 0.15f),
-                        border = BorderStroke(0.8.dp, accentColor.copy(alpha = 0.35f))
+                        shape = RoundedCornerShape(10.dp),
+                        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.75f),
+                        border = BorderStroke(1.dp, accentColor.copy(alpha = 0.35f))
                     ) {
                         Text(
                             text = opt.id,
-                            style = MaterialTheme.typography.labelSmall,
+                            style = MaterialTheme.typography.labelMedium,
                             fontWeight = FontWeight.ExtraBold,
                             color = accentColor,
-                            modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp)
+                            modifier = Modifier.padding(horizontal = 11.dp, vertical = 6.dp)
                         )
                     }
                 }
@@ -412,9 +547,9 @@ fun CategoryQuickCard(
 
 private fun categoryShortSubtitle(category: FormatCategory, isEn: Boolean): String {
     return when (category) {
-        FormatCategory.IMAGE -> if (isEn) "Tap a format or card to pick images" else "Toca un formato específico para buscar"
-        FormatCategory.DOCUMENT -> if (isEn) "PDF, Office documents, eBooks & comics" else "PDF, Office, libros EPUB y cómics"
-        FormatCategory.MEDIA -> if (isEn) "Video & audio formats (Trim, Crop, ID3)" else "Formatos de video y audio por separado"
+        FormatCategory.IMAGE -> if (isEn) "Convert, compress, stitch & edit photos" else "Convertir, comprimir, unir en tira y editar"
+        FormatCategory.DOCUMENT -> if (isEn) "PDF, Word, Excel, eBooks & comic books" else "PDF, Word, Excel, libros EPUB y cómics"
+        FormatCategory.MEDIA -> if (isEn) "Video & audio conversion, trim & crop" else "Video y audio, recorte, encuadre y MP3"
         FormatCategory.ARCHIVE -> if (isEn) "Extract .rar/.rar5, .zip, .7z & repack" else "Extraer .rar/.rar5, .zip, .7z y empaquetar"
         FormatCategory.DATA_TOOLS -> if (isEn) "Structured data & encrypted vault" else "Datos estructurados y bóveda AES-256"
     }

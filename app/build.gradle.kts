@@ -14,8 +14,8 @@ android {
         applicationId = "com.anywall.converter"
         minSdk = 26
         targetSdk = 35
-        versionCode = 5
-        versionName = "0.5"
+        versionCode = 6
+        versionName = "0.6"
         vectorDrawables {
             useSupportLibrary = true
         }
@@ -23,6 +23,15 @@ android {
             cmake {
                 cppFlags += "-std=c++17"
             }
+        }
+    }
+
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include("arm64-v8a", "armeabi-v7a", "x86", "x86_64")
+            isUniversalApk = true
         }
     }
 
@@ -47,15 +56,16 @@ android {
 
     buildTypes {
         release {
-            // La minificación se desactiva para preservar las clases que PDFBox, Mammoth y
-            // Commons Compress cargan dinámicamente (recursos, fuentes y codecs).
-            isMinifyEnabled = false
+            // Tree-shaking con R8 (-dontobfuscate) para eliminar los +11,900 iconos no utilizados
+            // de material-icons-extended preservando PDFBox, Mammoth, Commons Compress y Media3.
+            isMinifyEnabled = true
+            isShrinkResources = true
             val ksPath = System.getenv("ANYWALL_KEYSTORE_PATH")
             if (!ksPath.isNullOrBlank() && file(ksPath).exists()) {
                 signingConfig = signingConfigs.getByName("release")
             }
             proguardFiles(
-                getDefaultProguardFile("proguard-android-optimize.txt"),
+                getDefaultProguardFile("proguard-android.txt"),
                 "proguard-rules.pro"
             )
         }
@@ -89,8 +99,25 @@ android {
                 "META-INF/INDEX.LIST",
                 "META-INF/*.kotlin_module",
                 "META-INF/versions/**/module-info.class",
-                "module-info.class"
+                "module-info.class",
+                "org/bouncycastle/pqc/**"
             )
+        }
+    }
+}
+
+// Mantener compatibilidad con scripts/CI que buscan app-release.apk copiando el APK universal
+// (y dejando disponibles también los APKs ligeros por arquitectura como app-arm64-v8a-release.apk).
+tasks.configureEach {
+    if (name == "packageRelease") {
+        doLast {
+            val outDir = layout.buildDirectory.dir("outputs/apk/release").get().asFile
+            val universalSigned = outDir.resolve("app-universal-release.apk")
+            val universalUnsigned = outDir.resolve("app-universal-release-unsigned.apk")
+            when {
+                universalSigned.exists() -> universalSigned.copyTo(outDir.resolve("app-release.apk"), overwrite = true)
+                universalUnsigned.exists() -> universalUnsigned.copyTo(outDir.resolve("app-release-unsigned.apk"), overwrite = true)
+            }
         }
     }
 }

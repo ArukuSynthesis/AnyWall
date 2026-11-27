@@ -1,5 +1,9 @@
 package com.anywall.converter.ui.navigation
 
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
@@ -10,10 +14,12 @@ import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -40,10 +46,10 @@ import com.anywall.converter.ui.screens.SettingsScreen
 import com.anywall.converter.ui.screens.ToolsHubScreen
 
 /**
- * Grafo de navegación principal de AnyWall (v0.5) con Barra de Navegación Inferior de 5 pestañas:
+ * Grafo de navegación principal de AnyWall (v0.6 UX) con Barra de Navegación Inferior de 5 pestañas:
  * 1. **Convertir** (`HOME`: Selección rápida por categoría y formato específico, más `CONFIGURE`)
  * 2. **Estudios** (`TOOLS` -> `ToolsHubScreen` con los 6 Estudios Táctiles y Renombrador Masivo)
- * 3. **Seguridad** (`SECURITY_DATA` -> `SecurityAndDataScreen` con Datos/Bóveda AES-256, Duplicados SHA-256, Metadatos, QR y Diff)
+ * 3. **Seguridad** (`SECURITY_DATA` -> `SecurityAndDataScreen` con Bóveda `.anywall`, Datos, QR, Forense, Duplicados y Diff)
  * 4. **Historial** (`HISTORY` -> `HistoryScreen`)
  * 5. **Ajustes** (`SETTINGS` -> `SettingsScreen`)
  */
@@ -57,7 +63,6 @@ fun AnyWallNavHost(
     val configureState by viewModel.configureState.collectAsStateWithLifecycle()
     val allHistory by viewModel.allHistoryRecords.collectAsStateWithLifecycle()
     val filteredHistory by viewModel.filteredHistoryRecords.collectAsStateWithLifecycle()
-    val presets by viewModel.allPresets.collectAsStateWithLifecycle()
     val selectedCategory by viewModel.selectedHistoryCategory.collectAsStateWithLifecycle()
     val searchQuery by viewModel.historySearchQuery.collectAsStateWithLifecycle()
     val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
@@ -71,6 +76,7 @@ fun AnyWallNavHost(
     val autoCleanTempCache by viewModel.autoCleanTempCache.collectAsStateWithLifecycle()
     val defaultStripExif by viewModel.defaultStripExif.collectAsStateWithLifecycle()
     val tempCacheSizeBytes by viewModel.tempCacheSizeBytes.collectAsStateWithLifecycle()
+    val pendingVaultFiles by viewModel.pendingVaultFiles.collectAsStateWithLifecycle()
 
     val isEn = languageMode.isEnglishActive()
     val navBackStackEntry by navController.currentBackStackEntryAsState()
@@ -119,65 +125,84 @@ fun AnyWallNavHost(
         }
     }
 
+    LaunchedEffect(viewModel) {
+        viewModel.navigateToSecurityVaultFlow.collect {
+            navigateToBottomTab(AnyWallDestination.SECURITY_DATA)
+        }
+    }
+
     Scaffold(
         modifier = modifier.fillMaxSize(),
         bottomBar = {
             if (showBottomBar) {
-                NavigationBar(
-                    containerColor = MaterialTheme.colorScheme.surface,
-                    tonalElevation = 4.dp
-                ) {
-                    val bottomTabs = listOf(
-                        AnyWallDestination.HOME,
-                        AnyWallDestination.TOOLS,
-                        AnyWallDestination.SECURITY_DATA,
-                        AnyWallDestination.HISTORY,
-                        AnyWallDestination.SETTINGS
+                Column {
+                    HorizontalDivider(
+                        thickness = 0.6.dp,
+                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)
                     )
-                    bottomTabs.forEach { tab ->
-                        val selected = currentRoute == tab.route
-                        val tabIcon = when (tab) {
-                            AnyWallDestination.HOME -> Icons.Default.Bolt
-                            AnyWallDestination.TOOLS -> Icons.Default.AutoFixHigh
-                            AnyWallDestination.SECURITY_DATA -> Icons.Default.Security
-                            AnyWallDestination.HISTORY -> Icons.Default.History
-                            AnyWallDestination.SETTINGS -> Icons.Default.Settings
-                            AnyWallDestination.CONFIGURE -> Icons.Default.Bolt
-                        }
+                    NavigationBar(
+                        containerColor = MaterialTheme.colorScheme.surface,
+                        tonalElevation = 2.dp
+                    ) {
+                        val bottomTabs = listOf(
+                            AnyWallDestination.HOME,
+                            AnyWallDestination.TOOLS,
+                            AnyWallDestination.SECURITY_DATA,
+                            AnyWallDestination.HISTORY,
+                            AnyWallDestination.SETTINGS
+                        )
+                        bottomTabs.forEach { tab ->
+                            val selected = currentRoute == tab.route
+                            val tabIcon = when (tab) {
+                                AnyWallDestination.HOME -> Icons.Default.Bolt
+                                AnyWallDestination.TOOLS -> Icons.Default.AutoFixHigh
+                                AnyWallDestination.SECURITY_DATA -> Icons.Default.Security
+                                AnyWallDestination.HISTORY -> Icons.Default.History
+                                AnyWallDestination.SETTINGS -> Icons.Default.Settings
+                                AnyWallDestination.CONFIGURE -> Icons.Default.Bolt
+                            }
 
-                        NavigationBarItem(
-                            selected = selected,
-                            onClick = { navigateToBottomTab(tab) },
-                            icon = {
-                                if (tab == AnyWallDestination.HOME && configureState.inputFiles.isNotEmpty()) {
-                                    BadgedBox(
-                                        badge = {
-                                            Badge {
-                                                Text(configureState.inputFiles.size.toString())
+                            NavigationBarItem(
+                                selected = selected,
+                                onClick = { navigateToBottomTab(tab) },
+                                colors = NavigationBarItemDefaults.colors(
+                                    selectedIconColor = MaterialTheme.colorScheme.primary,
+                                    selectedTextColor = MaterialTheme.colorScheme.primary,
+                                    indicatorColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.72f),
+                                    unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant
+                                ),
+                                icon = {
+                                    if (tab == AnyWallDestination.HOME && configureState.inputFiles.isNotEmpty()) {
+                                        BadgedBox(
+                                            badge = {
+                                                Badge {
+                                                    Text(configureState.inputFiles.size.toString())
+                                                }
                                             }
+                                        ) {
+                                            Icon(
+                                                imageVector = tabIcon,
+                                                contentDescription = tab.localizedTitle(isEn)
+                                            )
                                         }
-                                    ) {
+                                    } else {
                                         Icon(
                                             imageVector = tabIcon,
                                             contentDescription = tab.localizedTitle(isEn)
                                         )
                                     }
-                                } else {
-                                    Icon(
-                                        imageVector = tabIcon,
-                                        contentDescription = tab.localizedTitle(isEn)
+                                },
+                                label = {
+                                    Text(
+                                        text = tab.localizedTitle(isEn),
+                                        fontWeight = if (selected) FontWeight.ExtraBold else FontWeight.Medium,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
                                     )
                                 }
-                            },
-                            label = {
-                                Text(
-                                    text = tab.localizedTitle(isEn),
-                                    fontWeight = if (selected) FontWeight.ExtraBold else FontWeight.Medium,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                            }
-                        )
+                            )
+                        }
                     }
                 }
             }
@@ -186,6 +211,10 @@ fun AnyWallNavHost(
         NavHost(
             navController = navController,
             startDestination = AnyWallDestination.HOME.route,
+            enterTransition = { fadeIn(animationSpec = tween(180)) },
+            exitTransition = { fadeOut(animationSpec = tween(140)) },
+            popEnterTransition = { fadeIn(animationSpec = tween(180)) },
+            popExitTransition = { fadeOut(animationSpec = tween(140)) },
             modifier = Modifier
                 .fillMaxSize()
                 .padding(outerPadding)
@@ -194,7 +223,6 @@ fun AnyWallNavHost(
                 HomeScreen(
                     configureState = configureState,
                     recentHistory = allHistory,
-                    presets = presets,
                     thumbnailLoader = viewModel.thumbnailLoader,
                     uriResolver = viewModel.uriFileResolver,
                     storageManager = viewModel.scopedStorageManager,
@@ -223,7 +251,6 @@ fun AnyWallNavHost(
                     onToggleDefaultStripExif = viewModel::setDefaultStripExif,
                     onRefreshTempCacheSize = viewModel::refreshTempCacheSize,
                     onClearTempCacheNow = viewModel::clearTempCacheNow,
-                    onApplyPreset = viewModel::applyConversionPreset,
                     onCreateCameraUri = viewModel::createCameraCaptureUri,
                     onFilesSelected = { uris ->
                         viewModel.addInputUris(
@@ -280,6 +307,7 @@ fun AnyWallNavHost(
                     onUpdatePdfSignaturePngPath = viewModel::updatePdfSignaturePngPath,
                     onUpdateTrimRangeMillis = viewModel::updateTrimRangeMillis,
                     onUpdateVideoCropSpec = viewModel::updateVideoCropSpec,
+                    onUpdateMuteVideoAudio = viewModel::updateMuteVideoAudio,
                     onUpdateSelectedArchiveEntries = viewModel::updateSelectedArchiveEntries,
                     onUpdateArchivePassword = viewModel::updateArchivePassword,
                     onSelectTargetFormat = viewModel::selectTargetFormat,
@@ -299,6 +327,8 @@ fun AnyWallNavHost(
                     uriResolver = viewModel.uriFileResolver,
                     storageManager = viewModel.scopedStorageManager,
                     forensicHelper = viewModel.forensicMetadataHelper,
+                    pendingVaultFiles = pendingVaultFiles,
+                    onConsumePendingVaultFiles = viewModel::consumePendingVaultFiles,
                     onFilesSelectedForConversion = { uris, forcedTarget ->
                         viewModel.addInputUris(
                             uris = uris,
@@ -309,14 +339,15 @@ fun AnyWallNavHost(
                             viewModel.selectTargetFormat(forcedTarget)
                         }
                     },
-                    onDeduplicateQueue = viewModel::replaceInputFilesList
+                    onDeduplicateQueue = viewModel::replaceInputFilesList,
+                    onRecordDirectConversions = viewModel::recordDirectConversionResults
                 )
             }
 
             composable(AnyWallDestination.CONFIGURE.route) {
                 ConfigureScreen(
                     state = configureState,
-                    presets = presets,
+                    recentHistory = allHistory,
                     thumbnailLoader = viewModel.thumbnailLoader,
                     uriResolver = viewModel.uriFileResolver,
                     storageManager = viewModel.scopedStorageManager,
@@ -346,8 +377,6 @@ fun AnyWallNavHost(
                     onSortByName = viewModel::sortInputFilesByName,
                     onSortBySize = viewModel::sortInputFilesBySize,
                     onReverseOrder = viewModel::reverseInputFilesOrder,
-                    onApplyPreset = viewModel::applyConversionPreset,
-                    onSaveNewPreset = viewModel::saveCurrentAsPreset,
                     onApplyVisualPdfEdits = viewModel::applyVisualPdfPageEdits,
                     onClearVisualPdfEdits = viewModel::clearVisualPdfPageEdits,
                     onApplyVisualImageEdits = viewModel::applyVisualImageEdits,

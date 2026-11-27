@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -344,47 +345,57 @@ fun ImageVisualEditorDialog(
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(
-            usePlatformDefaultWidth = false,
-            decorFitsSystemWindows = false
+            usePlatformDefaultWidth = false
         )
     ) {
         Surface(
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier
+                .fillMaxWidth(0.96f)
+                .fillMaxHeight(0.86f)
+                .clip(RoundedCornerShape(22.dp)),
+            shape = RoundedCornerShape(22.dp),
             color = studioBg,
             contentColor = Color.White
         ) {
             Column(modifier = Modifier.fillMaxSize()) {
-                // 1. TOP BAR DEL ESTUDIO
+                // 1. TOP BAR DEL ESTUDIO (Compacta, sin desbordamiento horizontal)
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .background(studioPanelBg)
-                        .padding(horizontal = 10.dp, vertical = 8.dp),
+                        .padding(horizontal = 8.dp, vertical = 6.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        IconButton(onClick = onDismiss) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        IconButton(
+                            onClick = onDismiss,
+                            modifier = Modifier.size(36.dp)
+                        ) {
                             Icon(
                                 imageVector = Icons.Default.Close,
                                 contentDescription = stringResource(R.string.btn_cancel),
                                 tint = Color.White
                             )
                         }
-                        Column {
+                        Column(modifier = Modifier.weight(1f)) {
                             Text(
                                 text = stringResource(R.string.photo_studio_title),
                                 style = MaterialTheme.typography.titleSmall,
                                 fontWeight = FontWeight.Bold,
-                                color = Color.White
+                                color = Color.White,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
                             Text(
                                 text = imageFile.name,
                                 style = MaterialTheme.typography.labelSmall,
                                 color = Color(0xFF94A3B8),
                                 maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.width(130.dp)
+                                overflow = TextOverflow.Ellipsis
                             )
                         }
                     }
@@ -402,12 +413,14 @@ fun ImageVisualEditorDialog(
                                     spec = prev
                                 }
                             },
-                            enabled = undoStack.isNotEmpty()
+                            enabled = undoStack.isNotEmpty(),
+                            modifier = Modifier.size(34.dp)
                         ) {
                             Icon(
                                 imageVector = Icons.AutoMirrored.Filled.Undo,
                                 contentDescription = stringResource(R.string.btn_undo),
-                                tint = if (undoStack.isNotEmpty()) Color.White else Color(0xFF475569)
+                                tint = if (undoStack.isNotEmpty()) Color.White else Color(0xFF475569),
+                                modifier = Modifier.size(18.dp)
                             )
                         }
                         // Redo
@@ -419,48 +432,15 @@ fun ImageVisualEditorDialog(
                                     spec = next
                                 }
                             },
-                            enabled = redoStack.isNotEmpty()
+                            enabled = redoStack.isNotEmpty(),
+                            modifier = Modifier.size(34.dp)
                         ) {
                             Icon(
                                 imageVector = Icons.AutoMirrored.Filled.Redo,
                                 contentDescription = stringResource(R.string.btn_redo),
-                                tint = if (redoStack.isNotEmpty()) Color.White else Color(0xFF475569)
+                                tint = if (redoStack.isNotEmpty()) Color.White else Color(0xFF475569),
+                                modifier = Modifier.size(18.dp)
                             )
-                        }
-                        // Hold to Compare (Antes / Después)
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(if (isHoldingCompare) studioAccent else Color(0xFF1E293B))
-                                .pointerInput(Unit) {
-                                    detectTapGestures(
-                                        onPress = {
-                                            isHoldingCompare = true
-                                            tryAwaitRelease()
-                                            isHoldingCompare = false
-                                        }
-                                    )
-                                }
-                                .padding(horizontal = 8.dp, vertical = 6.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(4.dp)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Compare,
-                                    contentDescription = stringResource(R.string.btn_hold_to_compare),
-                                    tint = Color.White,
-                                    modifier = Modifier.size(16.dp)
-                                )
-                                Text(
-                                    text = if (isHoldingCompare) "ANTES" else "Comparar",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = Color.White
-                                )
-                            }
                         }
                         // Reset
                         IconButton(
@@ -468,31 +448,34 @@ fun ImageVisualEditorDialog(
                                 pushUndoState(ImageEditSpec(applyToAllBatch = spec.applyToAllBatch))
                                 canvasZoom = 1f
                                 canvasPan = Offset.Zero
-                            }
+                            },
+                            modifier = Modifier.size(34.dp)
                         ) {
                             Icon(
                                 imageVector = Icons.Default.RestartAlt,
                                 contentDescription = stringResource(R.string.btn_reset_edits),
-                                tint = Color(0xFFF87171)
+                                tint = Color(0xFFF87171),
+                                modifier = Modifier.size(18.dp)
                             )
                         }
-                        // Guardar / Aplicar
+                        // Guardar / Aplicar (Acceso rápido superior)
                         Button(
                             onClick = { onApply(spec) },
                             colors = ButtonDefaults.buttonColors(
                                 containerColor = studioAccent,
                                 contentColor = Color.White
                             ),
-                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                            modifier = Modifier.height(34.dp)
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Check,
                                 contentDescription = null,
-                                modifier = Modifier.size(16.dp)
+                                modifier = Modifier.size(15.dp)
                             )
                             Spacer(modifier = Modifier.width(4.dp))
                             Text(
-                                text = stringResource(R.string.btn_apply_visual_edits),
+                                text = "Guardar",
                                 style = MaterialTheme.typography.labelMedium,
                                 fontWeight = FontWeight.Bold
                             )
@@ -1610,6 +1593,91 @@ fun ImageVisualEditorDialog(
                         accent = studioAccent,
                         onClick = { activeTab = PhotoStudioTab.TEXT_WATERMARK }
                     )
+                }
+
+                // 5. BARRA DE ACCIÓN INFERIOR (COMPARAR / CANCELAR / GUARDAR CAMBIOS)
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(studioPanelBg)
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // Hold to Compare (Antes / Después)
+                    Box(
+                        modifier = Modifier
+                            .height(38.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(if (isHoldingCompare) studioAccent else Color(0xFF1E293B))
+                            .pointerInput(Unit) {
+                                detectTapGestures(
+                                    onPress = {
+                                        isHoldingCompare = true
+                                        tryAwaitRelease()
+                                        isHoldingCompare = false
+                                    }
+                                )
+                            }
+                            .padding(horizontal = 10.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Compare,
+                                contentDescription = stringResource(R.string.btn_hold_to_compare),
+                                tint = Color.White,
+                                modifier = Modifier.size(15.dp)
+                            )
+                            Text(
+                                text = if (isHoldingCompare) "ANTES" else "Comparar",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.SemiBold,
+                                color = Color.White
+                            )
+                        }
+                    }
+
+                    OutlinedButton(
+                        onClick = onDismiss,
+                        modifier = Modifier.height(38.dp),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
+                    ) {
+                        Text(
+                            text = stringResource(R.string.btn_cancel),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = Color.White
+                        )
+                    }
+
+                    Button(
+                        onClick = { onApply(spec) },
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(38.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = studioAccent,
+                            contentColor = Color.White
+                        ),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Check,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = stringResource(R.string.btn_apply_visual_edits),
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
                 }
             }
         }

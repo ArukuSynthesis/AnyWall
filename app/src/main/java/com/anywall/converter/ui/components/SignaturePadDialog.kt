@@ -100,7 +100,7 @@ fun SignaturePadDialog(
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 Text(
-                    text = "Dibuja tu firma con el dedo en el recuadro. Se guardará de forma privada en el almacenamiento interno de AnyWall con fondo transparente.",
+                    text = "Dibuja tu firma con el dedo en el recuadro. Se guardará automáticamente en el almacenamiento interno de AnyWall con fondo transparente.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

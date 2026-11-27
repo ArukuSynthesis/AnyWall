@@ -95,13 +95,20 @@ class MainActivity : ComponentActivity() {
     private fun handleIncomingShareIntent(incomingIntent: Intent?) {
         if (incomingIntent == null) return
         val action = incomingIntent.action ?: return
-        if (action != Intent.ACTION_SEND && action != Intent.ACTION_SEND_MULTIPLE) {
+        if (action != Intent.ACTION_SEND &&
+            action != Intent.ACTION_SEND_MULTIPLE &&
+            action != Intent.ACTION_VIEW
+        ) {
             return
         }
 
         val sharedUris = linkedSetOf<Uri>()
 
         when (action) {
+            Intent.ACTION_VIEW -> {
+                incomingIntent.data?.let(sharedUris::add)
+            }
+
             Intent.ACTION_SEND -> {
                 val singleUri: Uri? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                     incomingIntent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
@@ -135,7 +142,10 @@ class MainActivity : ComponentActivity() {
         }
 
         if (sharedUris.isNotEmpty()) {
-            mainViewModel.onFilesReceivedFromShareSheet(sharedUris.toList())
+            mainViewModel.onFilesReceivedFromShareSheet(
+                uris = sharedUris.toList(),
+                isActionView = action == Intent.ACTION_VIEW
+            )
         }
     }
 

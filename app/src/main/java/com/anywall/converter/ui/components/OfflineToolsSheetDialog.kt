@@ -2,13 +2,19 @@ package com.anywall.converter.ui.components
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -19,6 +25,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -27,18 +34,22 @@ import androidx.compose.material.icons.filled.Compare
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Difference
 import androidx.compose.material.icons.filled.FileOpen
+import androidx.compose.material.icons.filled.Link
+import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.QrCode2
 import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.SaveAlt
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.VerifiedUser
 import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -84,6 +95,7 @@ import com.anywall.converter.data.engines.ForensicMetadataHelper
 import com.anywall.converter.data.engines.ImageVisualTransformHelper
 import com.anywall.converter.data.engines.LineDiffEngine
 import com.anywall.converter.data.engines.QrCodeHelper
+import com.anywall.converter.domain.model.FormatCategory
 import com.anywall.converter.domain.model.ImageEditSpec
 import com.anywall.converter.domain.model.InputFileItem
 import kotlinx.coroutines.Dispatchers
@@ -91,107 +103,19 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
 import java.io.FileOutputStream
+import java.util.Locale
+import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.roundToInt
 
 /**
- * Suite de Herramientas Técnicas (`OfflineToolsSheetDialog` - v0.4):
- * 1. Inspector Forense de Metadatos (EXIF/GPS, PDF, Multimedia) y Verificador de Hashes `SHA-256` / `MD5`.
- * 2. Generador y Escáner de Códigos QR (`PNG`, `SVG` vectorial y decodificación desde imagen).
+ * Suite de Herramientas Técnicas (`OfflineToolsSheetDialog` - v0.6):
+ * 1. Inspector Forense de Metadatos (EXIF/GPS, PDF, Multimedia, Paleta de 6 Colores Dominantes `#HEX`) y Verificador de Hashes `SHA-256` / `MD5`.
+ * 2. Generador y Escáner de Códigos QR y Códigos de Barras (`PNG`, `SVG` vectorial, Asistente Wi-Fi y decodificación desde imagen).
  * 3. Comparador de Diferencias Línea por Línea (`LineDiffEngine` LCS) con exportación `.diff.txt`.
  * 4. Comparador Visual «Antes / Después» con cortina deslizable interactiva y cálculo de ahorro en vivo.
  * 5. Detector y Limpiador de Duplicados en 2 fases (tamaño exacto + `SHA-256` en streaming).
  */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun OfflineToolsSheetDialog(
-    initialTabIndex: Int = 0,
-    loadedInputs: List<InputFileItem>,
-    currentImageEditSpec: ImageEditSpec = ImageEditSpec(),
-    currentQualityPercent: Int = 85,
-    uriResolver: UriFileResolver,
-    storageManager: ScopedStorageManager,
-    forensicHelper: ForensicMetadataHelper,
-    onDeduplicateQueue: ((List<InputFileItem>) -> Unit)? = null,
-    onDismiss: () -> Unit
-) {
-    var selectedTab by remember { mutableIntStateOf(initialTabIndex.coerceIn(0, 4)) }
-    val tabTitles = listOf(
-        "Metadatos & SHA-256",
-        "Códigos QR",
-        "Comparador Diff",
-        "Antes / Después",
-        "Duplicados SHA-256"
-    )
-
-    Dialog(
-        onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false)
-    ) {
-        Surface(
-            modifier = Modifier.fillMaxSize(),
-            color = MaterialTheme.colorScheme.background
-        ) {
-            Scaffold(
-                topBar = {
-                    Column {
-                        TopAppBar(
-                            title = {
-                                Column {
-                                    Text(
-                                        text = "Herramientas • AnyWall v0.4",
-                                        style = MaterialTheme.typography.titleMedium,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                    Text(
-                                        text = "SynthesizerEnd • Universal Converter",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.primary
-                                    )
-                                }
-                            },
-                            navigationIcon = {
-                                IconButton(onClick = onDismiss) {
-                                    Icon(Icons.Filled.Close, contentDescription = "Cerrar")
-                                }
-                            }
-                        )
-                        ScrollableTabRow(
-                            selectedTabIndex = selectedTab,
-                            edgePadding = 12.dp
-                        ) {
-                            tabTitles.forEachIndexed { idx, title ->
-                                Tab(
-                                    selected = selectedTab == idx,
-                                    onClick = { selectedTab = idx },
-                                    text = { Text(title, fontWeight = if (selectedTab == idx) FontWeight.Bold else FontWeight.Normal) }
-                                )
-                            }
-                        }
-                    }
-                }
-            ) { innerPadding ->
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(innerPadding)
-                ) {
-                    ToolsUtilityInlinePanel(
-                        selectedTab = selectedTab,
-                        loadedInputs = loadedInputs,
-                        currentImageEditSpec = currentImageEditSpec,
-                        currentQualityPercent = currentQualityPercent,
-                        uriResolver = uriResolver,
-                        storageManager = storageManager,
-                        forensicHelper = forensicHelper,
-                        onDeduplicateQueue = onDeduplicateQueue
-                    )
-                }
-            }
-        }
-    }
-}
-
 @Composable
 fun ToolsUtilityInlinePanel(
     selectedTab: Int,
@@ -232,16 +156,18 @@ fun ToolsUtilityInlinePanel(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun ForensicMetadataAndHashTab(
     loadedInputs: List<InputFileItem>,
     uriResolver: UriFileResolver,
     forensicHelper: ForensicMetadataHelper
 ) {
+    val context = LocalContext.current
     val clipboard = LocalClipboardManager.current
-    val scope = rememberCoroutineScope()
     var targetItem by remember { mutableStateOf(loadedInputs.firstOrNull()) }
     var report by remember { mutableStateOf<ForensicMetadataHelper.FileForensicReport?>(null) }
+    var dominantPalette by remember { mutableStateOf<List<Pair<String, Int>>>(emptyList()) }
     var isLoading by remember { mutableStateOf(false) }
     var expectedHashInput by remember { mutableStateOf("") }
 
@@ -256,13 +182,30 @@ private fun ForensicMetadataAndHashTab(
     LaunchedEffect(targetItem?.uri) {
         val item = targetItem ?: return@LaunchedEffect
         isLoading = true
-        report = withContext(Dispatchers.IO) {
-            try {
+        val (loadedReport, loadedPalette) = withContext(Dispatchers.IO) {
+            val rep = try {
                 forensicHelper.inspectInputFile(item)
             } catch (_: Throwable) {
                 null
             }
+            val pal = if (item.format.category == FormatCategory.IMAGE) {
+                try {
+                    uriResolver.openInputStream(item.uri).use { stream ->
+                        val bmp = BitmapFactory.decodeStream(stream)
+                        val extracted = bmp?.let { extractDominantColorsFromBitmap(it, maxColors = 6) }.orEmpty()
+                        bmp?.recycle()
+                        extracted
+                    }
+                } catch (_: Throwable) {
+                    emptyList()
+                }
+            } else {
+                emptyList()
+            }
+            rep to pal
         }
+        report = loadedReport
+        dominantPalette = loadedPalette
         isLoading = false
     }
 
@@ -297,7 +240,7 @@ private fun ForensicMetadataAndHashTab(
         } else if (report == null) {
             Card(modifier = Modifier.fillMaxWidth()) {
                 Text(
-                    text = "Selecciona cualquier archivo para analizar sus metadatos ocultos (EXIF, GPS, cámara, autor PDF, códecs) y calcular sus hashes criptográficos SHA-256 y MD5.",
+                    text = "Selecciona cualquier archivo para analizar sus metadatos ocultos (EXIF, GPS, cámara, autor PDF, códecs), extraer su paleta de colores dominantes (#HEX) y calcular sus hashes criptográficos SHA-256 y MD5.",
                     modifier = Modifier.padding(16.dp),
                     style = MaterialTheme.typography.bodyMedium
                 )
@@ -330,7 +273,12 @@ private fun ForensicMetadataAndHashTab(
                                 fontFamily = FontFamily.Monospace
                             )
                         }
-                        IconButton(onClick = { clipboard.setText(AnnotatedString(r.sha256Hex)) }) {
+                        IconButton(
+                            onClick = {
+                                clipboard.setText(AnnotatedString(r.sha256Hex))
+                                Toast.makeText(context, "SHA-256 copiado", Toast.LENGTH_SHORT).show()
+                            }
+                        ) {
                             Icon(Icons.Filled.ContentCopy, contentDescription = "Copiar SHA-256", modifier = Modifier.size(18.dp))
                         }
                     }
@@ -344,7 +292,12 @@ private fun ForensicMetadataAndHashTab(
                                 fontFamily = FontFamily.Monospace
                             )
                         }
-                        IconButton(onClick = { clipboard.setText(AnnotatedString(r.md5Hex)) }) {
+                        IconButton(
+                            onClick = {
+                                clipboard.setText(AnnotatedString(r.md5Hex))
+                                Toast.makeText(context, "MD5 copiado", Toast.LENGTH_SHORT).show()
+                            }
+                        ) {
                             Icon(Icons.Filled.ContentCopy, contentDescription = "Copiar MD5", modifier = Modifier.size(18.dp))
                         }
                     }
@@ -372,6 +325,71 @@ private fun ForensicMetadataAndHashTab(
                                 fontWeight = FontWeight.Bold,
                                 color = if (matches) Color(0xFFBBF7D0) else MaterialTheme.colorScheme.onErrorContainer
                             )
+                        }
+                    }
+                }
+            }
+
+            // Paleta de Colores Dominantes (#HEX) si el archivo es una imagen
+            if (dominantPalette.isNotEmpty()) {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(16.dp)
+                ) {
+                    Column(
+                        modifier = Modifier.padding(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Palette,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Text(
+                                text = "Paleta de Colores Dominantes (toca para copiar #HEX)",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            dominantPalette.forEach { (hexCode, argbColor) ->
+                                Surface(
+                                    onClick = {
+                                        clipboard.setText(AnnotatedString(hexCode))
+                                        Toast.makeText(context, "Color $hexCode copiado al portapapeles", Toast.LENGTH_SHORT).show()
+                                    },
+                                    shape = RoundedCornerShape(12.dp),
+                                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+                                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(20.dp)
+                                                .clip(CircleShape)
+                                                .background(Color(argbColor))
+                                        )
+                                        Text(
+                                            text = hexCode,
+                                            style = MaterialTheme.typography.labelMedium,
+                                            fontFamily = FontFamily.Monospace,
+                                            fontWeight = FontWeight.ExtraBold
+                                        )
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -441,9 +459,30 @@ private fun OfflineQrToolTab(
     val clipboard = LocalClipboardManager.current
     val scope = rememberCoroutineScope()
 
+    // 0 = Generar QR (PNG/SVG), 1 = Escanear QR / Código de Barras desde Imagen
+    var qrSubMode by remember { mutableIntStateOf(0) }
+    // Plantilla en Generador: 0 = Texto / Enlace, 1 = Red Wi-Fi
+    var generatorTemplate by remember { mutableIntStateOf(0) }
+
     var qrText by remember { mutableStateOf("https://github.com/ArukuSynthesis/AnyWall") }
+    var wifiSsid by remember { mutableStateOf("") }
+    var wifiPassword by remember { mutableStateOf("") }
+
+    val effectiveQrPayload = remember(generatorTemplate, qrText, wifiSsid, wifiPassword) {
+        if (generatorTemplate == 1) {
+            val cleanSsid = wifiSsid.trim().ifEmpty { "MiRedWiFi" }
+            val cleanPass = wifiPassword.trim()
+            val sec = if (cleanPass.isEmpty()) "nopass" else "WPA"
+            "WIFI:T:$sec;S:$cleanSsid;P:$cleanPass;;"
+        } else {
+            qrText
+        }
+    }
+
     var qrPreviewBitmap by remember { mutableStateOf<Bitmap?>(null) }
-    var decodedQrResult by remember { mutableStateOf<String?>(null) }
+    var scannedImagePreview by remember { mutableStateOf<Bitmap?>(null) }
+    var decodedInfo by remember { mutableStateOf<QrCodeHelper.DecodedBarcodeInfo?>(null) }
+    var scanErrorMessage by remember { mutableStateOf<String?>(null) }
     var statusMessage by remember { mutableStateOf<String?>(null) }
 
     val qrImageScannerLauncher = rememberLauncherForActivityResult(
@@ -451,30 +490,49 @@ private fun OfflineQrToolTab(
     ) { uri ->
         if (uri != null) {
             scope.launch(Dispatchers.IO) {
-                val decoded = try {
+                var thumbBmp: Bitmap? = null
+                val info = try {
                     context.contentResolver.openInputStream(uri)?.use { stream ->
                         val bmp = BitmapFactory.decodeStream(stream)
-                        val text = bmp?.let { QrCodeHelper.decodeQrFromBitmap(it) }
-                        bmp?.recycle()
-                        text
+                        if (bmp != null) {
+                            val maxEdge = max(bmp.width, bmp.height).coerceAtLeast(1)
+                            val scale = (360f / maxEdge.toFloat()).coerceAtMost(1f)
+                            thumbBmp = Bitmap.createScaledBitmap(
+                                bmp,
+                                (bmp.width * scale).roundToInt().coerceAtLeast(1),
+                                (bmp.height * scale).roundToInt().coerceAtLeast(1),
+                                true
+                            )
+                            val res = QrCodeHelper.decodeBarcodeInfoFromBitmap(bmp)
+                            if (thumbBmp !== bmp) bmp.recycle()
+                            res
+                        } else {
+                            null
+                        }
                     }
                 } catch (_: Throwable) {
                     null
                 }
                 withContext(Dispatchers.Main) {
-                    decodedQrResult = decoded ?: "No se detectó ningún código QR válido en la imagen seleccionada."
+                    scannedImagePreview = thumbBmp
+                    decodedInfo = info
+                    scanErrorMessage = if (info == null) {
+                        "No se detectó ningún código QR o código de barras válido en la imagen seleccionada."
+                    } else {
+                        null
+                    }
                 }
             }
         }
     }
 
-    LaunchedEffect(qrText) {
-        if (qrText.isBlank()) {
+    LaunchedEffect(effectiveQrPayload) {
+        if (effectiveQrPayload.isBlank()) {
             qrPreviewBitmap = null
         } else {
             qrPreviewBitmap = withContext(Dispatchers.Default) {
                 try {
-                    QrCodeHelper.generateQrBitmap(qrText, sizePx = 512)
+                    QrCodeHelper.generateQrBitmap(effectiveQrPayload, sizePx = 512)
                 } catch (_: Throwable) {
                     null
                 }
@@ -487,154 +545,422 @@ private fun OfflineQrToolTab(
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
             .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp)
+        verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(16.dp)
+        // 1. Selector Segmentado Superior: Generar QR vs Leer QR de Imagen
+        Surface(
+            shape = RoundedCornerShape(14.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+            modifier = Modifier.fillMaxWidth()
         ) {
-            Column(
-                modifier = Modifier.padding(14.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(4.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                Text(
-                    text = "Generador de Código QR",
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.Bold
-                )
-                OutlinedTextField(
-                    value = qrText,
-                    onValueChange = { qrText = it },
-                    modifier = Modifier.fillMaxWidth(),
-                    label = { Text("Texto, enlace, Wi-Fi o contacto vCard") },
-                    minLines = 2,
-                    maxLines = 4
-                )
-
-                val bmp = qrPreviewBitmap
-                if (bmp != null) {
-                    Image(
-                        bitmap = bmp.asImageBitmap(),
-                        contentDescription = "Código QR generado",
-                        modifier = Modifier
-                            .size(210.dp)
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(Color.White)
-                            .padding(8.dp)
-                    )
-                }
-
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Button(
-                        enabled = qrPreviewBitmap != null,
-                        onClick = {
-                            val currentBmp = qrPreviewBitmap ?: return@Button
-                            scope.launch(Dispatchers.IO) {
-                                val tempPng = uriResolver.createTempWorkingFile("qr_", "png")
-                                try {
-                                    FileOutputStream(tempPng).use { fos ->
-                                        currentBmp.compress(Bitmap.CompressFormat.PNG, 100, fos)
-                                    }
-                                    val saved = storageManager.saveTempFileToDownloads(
-                                        sourceFile = tempPng,
-                                        desiredDisplayName = "AnyWall_QR_${System.currentTimeMillis() % 10000}.png",
-                                        mimeType = "image/png"
-                                    )
-                                    withContext(Dispatchers.Main) {
-                                        statusMessage = "Guardado en Downloads/AnyWall/${saved.displayName}"
-                                    }
-                                } finally {
-                                    tempPng.delete()
-                                }
-                            }
-                        }
-                    ) {
-                        Icon(Icons.Filled.SaveAlt, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("Guardar PNG")
-                    }
-
-                    OutlinedButton(
-                        enabled = qrText.isNotBlank(),
-                        onClick = {
-                            scope.launch(Dispatchers.IO) {
-                                val svg = QrCodeHelper.generateQrSvg(qrText)
-                                val tempSvg = uriResolver.createTempWorkingFile("qr_", "svg")
-                                try {
-                                    tempSvg.writeText(svg, Charsets.UTF_8)
-                                    val saved = storageManager.saveTempFileToDownloads(
-                                        sourceFile = tempSvg,
-                                        desiredDisplayName = "AnyWall_QR_${System.currentTimeMillis() % 10000}.svg",
-                                        mimeType = "image/svg+xml"
-                                    )
-                                    withContext(Dispatchers.Main) {
-                                        statusMessage = "Guardado en Downloads/AnyWall/${saved.displayName}"
-                                    }
-                                } finally {
-                                    tempSvg.delete()
-                                }
-                            }
-                        }
+                Surface(
+                    onClick = { qrSubMode = 0 },
+                    shape = RoundedCornerShape(10.dp),
+                    color = if (qrSubMode == 0) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(vertical = 10.dp, horizontal = 8.dp),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
                         Icon(Icons.Filled.QrCode2, contentDescription = null, modifier = Modifier.size(16.dp))
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text("Guardar SVG")
+                        Text(
+                            text = "Generar QR (PNG/SVG)",
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = if (qrSubMode == 0) FontWeight.ExtraBold else FontWeight.Medium
+                        )
                     }
                 }
-
-                if (!statusMessage.isNullOrBlank()) {
-                    Text(
-                        text = statusMessage!!,
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.primary,
-                        fontWeight = FontWeight.SemiBold
-                    )
+                Surface(
+                    onClick = { qrSubMode = 1 },
+                    shape = RoundedCornerShape(10.dp),
+                    color = if (qrSubMode == 1) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(vertical = 10.dp, horizontal = 8.dp),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(Icons.Filled.QrCodeScanner, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "Leer QR de Imagen",
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = if (qrSubMode == 1) FontWeight.ExtraBold else FontWeight.Medium
+                        )
+                    }
                 }
             }
         }
 
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(16.dp)
-        ) {
-            Column(
-                modifier = Modifier.padding(14.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+        if (qrSubMode == 0) {
+            // MODO GENERADOR QR
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp)
             ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
+                Column(
+                    modifier = Modifier.padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    Text(
-                        text = "Escáner QR desde Imagen Local",
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Bold
-                    )
-                    FilledTonalButton(onClick = { qrImageScannerLauncher.launch(arrayOf("image/*")) }) {
-                        Icon(Icons.Filled.QrCodeScanner, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("Escanear imagen")
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        FilterChip(
+                            selected = generatorTemplate == 0,
+                            onClick = { generatorTemplate = 0 },
+                            leadingIcon = { Icon(Icons.Filled.Link, contentDescription = null, modifier = Modifier.size(15.dp)) },
+                            label = { Text("Texto / URL") }
+                        )
+                        FilterChip(
+                            selected = generatorTemplate == 1,
+                            onClick = { generatorTemplate = 1 },
+                            leadingIcon = { Icon(Icons.Filled.Wifi, contentDescription = null, modifier = Modifier.size(15.dp)) },
+                            label = { Text("Red Wi-Fi") }
+                        )
+                    }
+
+                    if (generatorTemplate == 0) {
+                        OutlinedTextField(
+                            value = qrText,
+                            onValueChange = { qrText = it },
+                            modifier = Modifier.fillMaxWidth(),
+                            label = { Text("Texto, enlace o contacto vCard") },
+                            minLines = 2,
+                            maxLines = 4
+                        )
+                    } else {
+                        OutlinedTextField(
+                            value = wifiSsid,
+                            onValueChange = { wifiSsid = it },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                            label = { Text("Nombre de la red Wi-Fi (SSID)") }
+                        )
+                        OutlinedTextField(
+                            value = wifiPassword,
+                            onValueChange = { wifiPassword = it },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                            label = { Text("Contraseña Wi-Fi (WPA/WPA2/WPA3)") }
+                        )
+                    }
+
+                    val bmp = qrPreviewBitmap
+                    if (bmp != null) {
+                        Image(
+                            bitmap = bmp.asImageBitmap(),
+                            contentDescription = "Código QR generado",
+                            modifier = Modifier
+                                .size(200.dp)
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(Color.White)
+                                .padding(8.dp)
+                        )
+                    }
+
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Button(
+                            enabled = qrPreviewBitmap != null,
+                            onClick = {
+                                val currentBmp = qrPreviewBitmap ?: return@Button
+                                scope.launch(Dispatchers.IO) {
+                                    val tempPng = uriResolver.createTempWorkingFile("qr_", "png")
+                                    try {
+                                        FileOutputStream(tempPng).use { fos ->
+                                            currentBmp.compress(Bitmap.CompressFormat.PNG, 100, fos)
+                                        }
+                                        val saved = storageManager.saveTempFileToDownloads(
+                                            sourceFile = tempPng,
+                                            desiredDisplayName = "AnyWall_QR_${System.currentTimeMillis() % 10000}.png",
+                                            mimeType = "image/png"
+                                        )
+                                        withContext(Dispatchers.Main) {
+                                            statusMessage = "Guardado en Downloads/AnyWall/${saved.displayName}"
+                                        }
+                                    } finally {
+                                        tempPng.delete()
+                                    }
+                                }
+                            }
+                        ) {
+                            Icon(Icons.Filled.SaveAlt, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Guardar PNG")
+                        }
+
+                        OutlinedButton(
+                            enabled = effectiveQrPayload.isNotBlank(),
+                            onClick = {
+                                scope.launch(Dispatchers.IO) {
+                                    val svg = QrCodeHelper.generateQrSvg(effectiveQrPayload)
+                                    val tempSvg = uriResolver.createTempWorkingFile("qr_", "svg")
+                                    try {
+                                        tempSvg.writeText(svg, Charsets.UTF_8)
+                                        val saved = storageManager.saveTempFileToDownloads(
+                                            sourceFile = tempSvg,
+                                            desiredDisplayName = "AnyWall_QR_${System.currentTimeMillis() % 10000}.svg",
+                                            mimeType = "image/svg+xml"
+                                        )
+                                        withContext(Dispatchers.Main) {
+                                            statusMessage = "Guardado en Downloads/AnyWall/${saved.displayName}"
+                                        }
+                                    } finally {
+                                        tempSvg.delete()
+                                    }
+                                }
+                            }
+                        ) {
+                            Icon(Icons.Filled.QrCode2, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Guardar SVG")
+                        }
+                    }
+
+                    if (!statusMessage.isNullOrBlank()) {
+                        Text(
+                            text = statusMessage!!,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.primary,
+                            fontWeight = FontWeight.SemiBold
+                        )
                     }
                 }
+            }
+        } else {
+            // MODO ESCÁNER QR / CÓDIGO DE BARRAS DESDE IMAGEN
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp)
+            ) {
+                Column(
+                    modifier = Modifier.padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Text(
+                        text = "Decodificar QR o Código de Barras desde Imagen",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.ExtraBold
+                    )
+                    Text(
+                        text = "Selecciona cualquier captura de pantalla o foto que contenga un código QR (normal o modo oscuro), DataMatrix, Aztec o Código de Barras.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
 
-                if (!decodedQrResult.isNullOrBlank()) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            text = decodedQrResult!!,
-                            modifier = Modifier.weight(1f),
-                            style = MaterialTheme.typography.bodySmall,
-                            fontFamily = FontFamily.Monospace
-                        )
-                        IconButton(onClick = { clipboard.setText(AnnotatedString(decodedQrResult!!)) }) {
-                            Icon(Icons.Filled.ContentCopy, contentDescription = "Copiar resultado QR")
+                    Button(
+                        onClick = { qrImageScannerLauncher.launch(arrayOf("image/*")) },
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Filled.QrCodeScanner, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Seleccionar captura o foto con QR", fontWeight = FontWeight.Bold)
+                    }
+
+                    val previewBmp = scannedImagePreview
+                    if (previewBmp != null) {
+                        Box(
+                            modifier = Modifier.fillMaxWidth(),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Image(
+                                bitmap = previewBmp.asImageBitmap(),
+                                contentDescription = "Imagen escaneada",
+                                contentScale = ContentScale.Fit,
+                                modifier = Modifier
+                                    .height(140.dp)
+                                    .clip(RoundedCornerShape(12.dp))
+                            )
+                        }
+                    }
+
+                    if (scanErrorMessage != null) {
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = MaterialTheme.colorScheme.errorContainer,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                text = scanErrorMessage!!,
+                                modifier = Modifier.padding(12.dp),
+                                style = MaterialTheme.typography.bodySmall,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onErrorContainer
+                            )
+                        }
+                    }
+
+                    val info = decodedInfo
+                    if (info != null) {
+                        // Si es un QR de red Wi-Fi, mostrar tarjeta dedicada con SSID y Contraseña
+                        if (info.wifiSsid != null) {
+                            Surface(
+                                shape = RoundedCornerShape(14.dp),
+                                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.7f),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(12.dp),
+                                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Filled.Wifi,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.onPrimaryContainer
+                                        )
+                                        Text(
+                                            text = "Red Wi-Fi Detectada: ${info.wifiSsid}",
+                                            style = MaterialTheme.typography.titleSmall,
+                                            fontWeight = FontWeight.ExtraBold,
+                                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                                        )
+                                    }
+                                    if (!info.wifiPassword.isNullOrBlank()) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.SpaceBetween
+                                        ) {
+                                            Text(
+                                                text = "Clave: ${info.wifiPassword}",
+                                                style = MaterialTheme.typography.bodyMedium,
+                                                fontFamily = FontFamily.Monospace,
+                                                fontWeight = FontWeight.Bold,
+                                                color = MaterialTheme.colorScheme.onPrimaryContainer
+                                            )
+                                            FilledTonalButton(
+                                                onClick = {
+                                                    clipboard.setText(AnnotatedString(info.wifiPassword))
+                                                    Toast.makeText(context, "Contraseña Wi-Fi copiada", Toast.LENGTH_SHORT).show()
+                                                }
+                                            ) {
+                                                Icon(Icons.Filled.ContentCopy, contentDescription = null, modifier = Modifier.size(15.dp))
+                                                Spacer(modifier = Modifier.width(6.dp))
+                                                Text("Copiar clave Wi-Fi")
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        Surface(
+                            shape = RoundedCornerShape(14.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.65f),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(12.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Text(
+                                    text = "Formato detectado: ${info.formatName}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                Text(
+                                    text = info.text,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontFamily = FontFamily.Monospace
+                                )
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    FilledTonalButton(
+                                        onClick = {
+                                            clipboard.setText(AnnotatedString(info.text))
+                                            Toast.makeText(context, "Contenido copiado al portapapeles", Toast.LENGTH_SHORT).show()
+                                        }
+                                    ) {
+                                        Icon(Icons.Filled.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text("Copiar texto")
+                                    }
+                                    OutlinedButton(
+                                        onClick = {
+                                            qrText = info.text
+                                            generatorTemplate = 0
+                                            qrSubMode = 0
+                                        }
+                                    ) {
+                                        Icon(Icons.Filled.QrCode2, contentDescription = null, modifier = Modifier.size(16.dp))
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text("Editar en Generador")
+                                    }
+                                }
+                            }
                         }
                     }
                 }
             }
         }
     }
+}
+
+private fun extractDominantColorsFromBitmap(bitmap: Bitmap, maxColors: Int = 6): List<Pair<String, Int>> {
+    if (bitmap.width <= 0 || bitmap.height <= 0) return emptyList()
+    val scaled = Bitmap.createScaledBitmap(bitmap, 48, 48, true)
+    val bucketCounts = HashMap<Int, Int>()
+    val bucketSumR = HashMap<Int, Long>()
+    val bucketSumG = HashMap<Int, Long>()
+    val bucketSumB = HashMap<Int, Long>()
+
+    val pixels = IntArray(48 * 48)
+    scaled.getPixels(pixels, 0, 48, 0, 0, 48, 48)
+    if (scaled !== bitmap) scaled.recycle()
+
+    for (p in pixels) {
+        val a = (p ushr 24) and 0xFF
+        if (a < 128) continue
+        val r = (p ushr 16) and 0xFF
+        val g = (p ushr 8) and 0xFF
+        val b = p and 0xFF
+        // Cuantización en cubos de 32 niveles por canal (8x8x8 = 512 cubos)
+        val bucketKey = ((r / 32) shl 6) or ((g / 32) shl 3) or (b / 32)
+        bucketCounts[bucketKey] = (bucketCounts[bucketKey] ?: 0) + 1
+        bucketSumR[bucketKey] = (bucketSumR[bucketKey] ?: 0L) + r
+        bucketSumG[bucketKey] = (bucketSumG[bucketKey] ?: 0L) + g
+        bucketSumB[bucketKey] = (bucketSumB[bucketKey] ?: 0L) + b
+    }
+
+    val sortedBuckets = bucketCounts.entries.sortedByDescending { it.value }
+    val selected = mutableListOf<Pair<String, Int>>()
+
+    for ((key, count) in sortedBuckets) {
+        if (selected.size >= maxColors) break
+        val avgR = ((bucketSumR[key] ?: 0L) / count).toInt().coerceIn(0, 255)
+        val avgG = ((bucketSumG[key] ?: 0L) / count).toInt().coerceIn(0, 255)
+        val avgB = ((bucketSumB[key] ?: 0L) / count).toInt().coerceIn(0, 255)
+
+        val tooSimilar = selected.any { (_, existingArgb) ->
+            val er = (existingArgb ushr 16) and 0xFF
+            val eg = (existingArgb ushr 8) and 0xFF
+            val eb = existingArgb and 0xFF
+            (abs(avgR - er) + abs(avgG - eg) + abs(avgB - eb)) < 55
+        }
+        if (!tooSimilar) {
+            val argb = (0xFF shl 24) or (avgR shl 16) or (avgG shl 8) or avgB
+            val hex = String.format(Locale.US, "#%02X%02X%02X", avgR, avgG, avgB)
+            selected.add(hex to argb)
+        }
+    }
+    return selected
 }
 
 @Composable

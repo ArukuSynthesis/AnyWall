@@ -19,10 +19,10 @@ import com.anywall.converter.data.engines.DuplicateFilesDetector
 import com.anywall.converter.data.engines.ForensicMetadataHelper
 import com.anywall.converter.domain.engine.ConverterEngineRegistry
 import com.anywall.converter.domain.model.ActiveJobState
+import com.anywall.converter.domain.model.ConversionJobResult
 import com.anywall.converter.domain.model.ArchiveCompressionLevel
 import com.anywall.converter.domain.model.AudioMetadataSpec
 import com.anywall.converter.domain.model.ConversionOptions
-import com.anywall.converter.domain.model.ConversionPreset
 import com.anywall.converter.domain.model.FormatCategory
 import com.anywall.converter.domain.model.HistoryRecord
 import com.anywall.converter.domain.model.ImageBatchLayoutMode
@@ -41,7 +41,6 @@ import com.anywall.converter.domain.model.TextEncodingOption
 import com.anywall.converter.domain.model.VideoCropSpec
 import com.anywall.converter.domain.model.VideoResolution
 import com.anywall.converter.domain.repository.ConversionHistoryRepository
-import com.anywall.converter.domain.repository.ConversionPresetRepository
 import com.anywall.converter.workers.BatchConversionWorker
 import com.anywall.converter.workers.ConversionWorkScheduler
 import kotlinx.coroutines.Dispatchers
@@ -331,7 +330,6 @@ class MainViewModel(
     val archiveEngineImpl: ArchiveEngineImpl,
     private val engineRegistry: ConverterEngineRegistry,
     private val historyRepository: ConversionHistoryRepository,
-    private val presetRepository: ConversionPresetRepository,
     private val workScheduler: ConversionWorkScheduler
 ) : ViewModel() {
 
@@ -369,10 +367,19 @@ class MainViewModel(
     private val _navigateToConfigureChannel = Channel<Unit>(Channel.BUFFERED)
     val navigateToConfigureFlow = _navigateToConfigureChannel.receiveAsFlow()
 
-    val allHistoryRecords: StateFlow<List<HistoryRecord>> = historyRepository.observeAll()
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+    private val _navigateToSecurityVaultChannel = Channel<Unit>(Channel.BUFFERED)
+    val navigateToSecurityVaultFlow = _navigateToSecurityVaultChannel.receiveAsFlow()
 
-    val allPresets: StateFlow<List<ConversionPreset>> = presetRepository.observeAllPresets()
+    private val _pendingVaultFiles = MutableStateFlow<List<InputFileItem>>(emptyList())
+    val pendingVaultFiles: StateFlow<List<InputFileItem>> = _pendingVaultFiles.asStateFlow()
+
+    fun consumePendingVaultFiles(): List<InputFileItem> {
+        val current = _pendingVaultFiles.value
+        _pendingVaultFiles.value = emptyList()
+        return current
+    }
+
+    val allHistoryRecords: StateFlow<List<HistoryRecord>> = historyRepository.observeAll()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     val filteredHistoryRecords: StateFlow<List<HistoryRecord>> = combine(
@@ -396,7 +403,6 @@ class MainViewModel(
     init {
         performStartupCacheMaintenance()
         viewModelScope.launch(Dispatchers.IO) {
-            presetRepository.ensureBuiltInPresetsSeeded()
         }
     }
 
@@ -472,61 +478,12 @@ class MainViewModel(
         return uriFileResolver.createCameraCaptureOutputUri()
     }
 
-    fun applyConversionPreset(preset: ConversionPreset) {
-        _configureState.update { current ->
-            val targetAllowed = if (current.availableTargetFormats.isEmpty() ||
-                preset.targetFormat in current.availableTargetFormats
-            ) {
-                preset.targetFormat
-            } else {
-                current.selectedTargetFormat
-            }
-            current.copy(
-                selectedTargetFormat = targetAllowed,
-                options = preset.options.copy(
-                    pdfVisualPageEditsJson = current.options.pdfVisualPageEditsJson
-                ),
-                targetImageMaxKbText = preset.options.targetImageMaxSizeKb?.toString().orEmpty(),
-                targetVideoMaxMbText = preset.options.targetVideoMaxSizeMb?.toString().orEmpty(),
-                trimStartText = preset.options.trimStartSeconds?.toString().orEmpty(),
-                trimEndText = preset.options.trimEndSeconds?.toString().orEmpty()
-            )
-        }
-    }
-
-    fun saveCurrentAsPreset(name: String, description: String) {
-        val cleanName = name.trim()
-        if (cleanName.isEmpty()) return
-        val snap = _configureState.value
-        val target = snap.selectedTargetFormat ?: SupportedFormat.PDF
-        viewModelScope.launch(Dispatchers.IO) {
-            presetRepository.savePreset(
-                ConversionPreset(
-                    name = cleanName,
-                    description = description.trim().ifBlank { "${target.label} • ${snap.options.clampedQuality}%" },
-                    category = target.category,
-                    targetFormat = target,
-                    options = snap.options.copy(
-                        pdfVisualPageEditsJson = "",
-                        selectedArchiveEntriesSerialized = ""
-                    ),
-                    isBuiltIn = false
-                )
-            )
-        }
-    }
-
-    fun deleteConversionPreset(id: Long) {
-        viewModelScope.launch(Dispatchers.IO) {
-            presetRepository.deletePreset(id)
-        }
-    }
-
     fun addInputUris(
         uris: List<Uri>,
         replaceExisting: Boolean = false,
         navigateToConfigure: Boolean = true,
-        fromShareSheet: Boolean = false
+        fromShareSheet: Boolean = false,
+        isActionView: Boolean = false
     ) {
         if (uris.isEmpty()) return
         viewModelScope.launch {
@@ -536,19 +493,49 @@ class MainViewModel(
                 uris.mapNotNull { uri -> uriFileResolver.resolveInputFile(uri) }
             }
 
+            // Enrutamiento inteligente UX: si el usuario abre o comparte archivos .anywall,
+            // llevarlo directamente a la Bóveda AES-256-GCM en Modo Desencriptar.
+            val allVaultFiles = resolvedItems.isNotEmpty() && resolvedItems.all {
+                it.format == SupportedFormat.ANYWALL_VAULT ||
+                    it.displayName.lowercase().endsWith(".anywall") ||
+                    it.displayName.lowercase().endsWith(".awv")
+            }
+            if ((fromShareSheet || isActionView) && allVaultFiles) {
+                _configureState.update { it.copy(isResolvingFiles = false) }
+                _pendingVaultFiles.value = resolvedItems
+                _navigateToSecurityVaultChannel.trySend(Unit)
+                return@launch
+            }
+
             _configureState.update { current ->
                 val baseList = if (replaceExisting) emptyList() else current.inputFiles
                 val existingUris = baseList.map { it.uri }.toSet()
                 val mergedInputs = baseList + resolvedItems.filter { it.uri !in existingUris }
+                val updatedOptions = if (replaceExisting) {
+                    current.options.copy(
+                        pdfVisualPageEditsJson = "",
+                        selectedArchiveEntriesSerialized = "",
+                        imageVisualEditSerialized = "",
+                        videoCropSerialized = "",
+                        trimStartMillis = 0L,
+                        trimEndMillis = 0L,
+                        trimStartSeconds = null,
+                        trimEndSeconds = null
+                    )
+                } else {
+                    current.options.copy(
+                        pdfVisualPageEditsJson = "",
+                        selectedArchiveEntriesSerialized = ""
+                    )
+                }
                 recalculateAvailableFormats(
                     current.copy(
                         inputFiles = mergedInputs,
-                        options = current.options.copy(
-                            pdfVisualPageEditsJson = "",
-                            selectedArchiveEntriesSerialized = ""
-                        ),
+                        options = updatedOptions,
+                        trimStartText = if (replaceExisting) "" else current.trimStartText,
+                        trimEndText = if (replaceExisting) "" else current.trimEndText,
                         isResolvingFiles = false,
-                        showSmartShareSheet = fromShareSheet && mergedInputs.isNotEmpty(),
+                        showSmartShareSheet = fromShareSheet && !isActionView && mergedInputs.isNotEmpty(),
                         activeJob = if (replaceExisting && !current.activeJob.isRunning) {
                             ActiveJobState()
                         } else {
@@ -606,12 +593,16 @@ class MainViewModel(
         }
     }
 
-    fun onFilesReceivedFromShareSheet(uris: List<Uri>) {
+    fun onFilesReceivedFromShareSheet(
+        uris: List<Uri>,
+        isActionView: Boolean = false
+    ) {
         addInputUris(
             uris = uris,
             replaceExisting = true,
             navigateToConfigure = true,
-            fromShareSheet = true
+            fromShareSheet = true,
+            isActionView = isActionView
         )
     }
 
@@ -1299,6 +1290,13 @@ class MainViewModel(
         _historySearchQuery.value = query
     }
 
+    fun recordDirectConversionResults(results: List<ConversionJobResult>) {
+        if (results.isEmpty()) return
+        viewModelScope.launch {
+            historyRepository.recordConversions(results)
+        }
+    }
+
     fun deleteHistoryRecord(record: HistoryRecord, deletePhysicalFile: Boolean = true) {
         viewModelScope.launch {
             historyRepository.deleteRecord(record, deletePhysicalFile)
@@ -1361,7 +1359,6 @@ class MainViewModel(
                         archiveEngineImpl = container.archiveEngineImpl,
                         engineRegistry = container.converterEngineRegistry,
                         historyRepository = container.historyRepository,
-                        presetRepository = container.presetRepository,
                         workScheduler = container.workScheduler
                     ) as T
                 }

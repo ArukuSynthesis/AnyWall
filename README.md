@@ -1,13 +1,31 @@
-# AnyWall: Universal Converter (v0.5)
+# AnyWall: Universal Converter (v0.6)
 
 **Conversor Universal para Android** desarrollado por **SynthesizerEnd**.
 
 **AnyWall** (`com.anywall.converter`) convierte y edita imágenes, documentos Office/PDF/XLSX/EPUB, video, audio, cómics, archivos comprimidos y datos estructurados ejecutando todo el procesamiento en el hardware del dispositivo. El APK final declara **0 permisos de red** (`INTERNET`, `ACCESS_NETWORK_STATE`, `ACCESS_WIFI_STATE`), verificado automáticamente en CI con `aapt2 dump permissions`.
 
-- **Versión:** `versionCode = 5` • `versionName = "0.5"`
+- **Versión:** `versionCode = 6` • `versionName = "0.6"`
 - **Android mínimo:** 8.0 (API 26) • **Target SDK:** 35
 
 ---
+
+## Novedades de v0.6 (Optimización del -67% de Tamaño APK, Bóveda `.anywall` Directa y Refinamiento Integral de UX/UI)
+
+- **Optimización extrema del APK (-67% de peso):**
+  - Activación de *tree-shaking* R8 (`isMinifyEnabled = true`, `isShrinkResources = true` con `-dontobfuscate` para trazas legibles), exclusión del paquete `org.bouncycastle.pqc`, banderas NDK/CMake `-Os -Wl,--gc-sections -Wl,-s` para `libarchive` y *splits* nativos por arquitectura (`arm64-v8a` de **~8.9 MB** y APK `universal` de **~12.0 MB**, frente a los 27.0 MB de v0.5).
+- **Asociación Nativa de Archivos en Android (`ACTION_VIEW`) y Enrutamiento Inteligente:**
+  - Tocar cualquier archivo `.anywall`, `.rar`, `.7z`, `.zip`, `.cbz`, `.cbr`, `.tar`, `.gz`, `.bz2` o `.xz` desde el explorador de archivos o apps de mensajería abre AnyWall directamente. Los contenedores `.anywall` se enrutan automáticamente a la pestaña **Seguridad → Bóveda `.anywall`** en modo Desencriptar.
+- **Gestor Directo de Bóveda `.anywall` (`AES-256-GCM`) y Generador `SecureRandom`:**
+  - Panel dedicado en la pestaña **Seguridad** con generador criptográfico de 1 toque (llave de 20 caracteres de alta entropía o *passphrase* memorable de 4 palabras), botón de copia al portapapeles e indicador de fortaleza en tiempo real.
+- **Resultado Inmediato Post-Conversión (`Antes → Después`):**
+  - Tarjetas de resultado en `ConversionProgressCard` y en la Bóveda `.anywall` con miniatura visual, comparativa de tamaño y botones directos **Abrir** y **Compartir** sin cambiar de pestaña.
+- **Escáner QR Universal + Asistente Wi-Fi + Paleta Dominante `#HEX`:**
+  - Escáner QR y códigos de barras desde imagen con soporte para QR invertidos y decodificador de redes `WIFI:S:...` con copia de contraseña en 1 toque.
+  - Extractor de paleta de 6 colores dominantes `#HEX` en el Inspector Forense de imágenes.
+- **Refinamiento de UX/UI y Estudios Táctiles:**
+  - **Inicio (`HomeScreen`):** barra de entrada rápida en 1 columna con botones horizontales de ancho completo (`Elegir Archivos`, `Importar Carpeta`, `Capturar con Cámara`) sin truncamiento de texto, y selector de formato con `ModalBottomSheet` y opción `"Todos"`.
+  - **Estudio de Fotos (`ImageVisualEditorDialog`) y Estudio PDF (`PdfVisualEditorDialog`):** contenedores modales acotados dentro del área segura de la pantalla (`96% × 86%`) con botones **Guardar** siempre visibles y accesibles tanto en la barra superior como en la barra inferior.
+  - **Recorte y Línea de Tiempo de Video (`MediaTimelineTrimmerDialog` & `VideoCropDialog`):** cálculo exacto de caja `(fitW, fitH)` para videos 16:9 horizontales, protección de estado `isPlayerPrepared` en `MediaPlayer` y arrastre 1:1 de los 4 bordes y 4 esquinas.
 
 ## Novedades de v0.5 (Rediseño Integral de UI y Arquitectura de Navegación)
 
